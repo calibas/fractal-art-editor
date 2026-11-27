@@ -315,8 +315,24 @@ fn identifier_kind(kind: &str) -> bool {
 /// Everything the app ships, as import records, and what is wrong with it.
 pub struct Manifest {
     pub records: Vec<Value>,
+    /// Where each record came from, one for each, in order: what a tool
+    /// that must name an item as the API knows it (the preview exporter,
+    /// docs/projects/previews.md) reads, so it cannot drift from the sync.
+    pub origins: Vec<Origin>,
     /// Problems worth reading: renamed duplicates, items left out.
     pub notes: Vec<String>,
+}
+
+/// A manifest record's source.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Origin {
+    /// The preset at this index of `load_embedded_presets`, in file order.
+    Preset(usize),
+    Palette,
+    /// A built-in variation or effect: its registry name is its name.
+    Builtin,
+    /// A shipped script or Rhai example, by its file name.
+    Script(String),
 }
 
 /// Names taken in a kind's namespace, compared without case: a duplicate
@@ -364,13 +380,14 @@ fn record(kind: &str, name: String, display_name: &str, description: Option<Stri
 #[cfg(not(target_arch = "wasm32"))]
 pub fn manifest() -> Manifest {
     let mut records = Vec::new();
+    let mut origins = Vec::new();
     let mut notes = Vec::new();
     let mut names = Names::default();
 
     // Fractals: every preset, as the app would save it online.
     match crate::resources::presets::load_embedded_presets() {
         Ok(presets) => {
-            for config in presets {
+            for (index, config) in presets.into_iter().enumerate() {
                 let display = config.flame.name.clone();
                 let request = match crate::api::sync::config_to_create_request(&config, None) {
                     Ok(r) => r,
@@ -388,6 +405,7 @@ pub fn manifest() -> Manifest {
                     "palette": request.palette,
                 });
                 records.push(record("fractal", name, &display, None, None, hash, content));
+                origins.push(Origin::Preset(index));
             }
         }
         Err(e) => notes.push(format!("fractal: the presets did not load: {e}")),
@@ -412,6 +430,7 @@ pub fn manifest() -> Manifest {
             let name = names.claim("palette", &slug(&palette.name, false), &mut notes);
             let description = Some(format!("From the {} pack.", pack.pack_name));
             records.push(record("palette", name, &palette.name, description, None, hash, json!({ "color_data": color_data, "stops": stops })));
+            origins.push(Origin::Palette);
         }
     }
 
@@ -423,6 +442,7 @@ pub fn manifest() -> Manifest {
         let display = row["display_name"].as_str().unwrap_or(&name).to_string();
         let hash = of_variation(&row);
         records.push(record("variation", name, &display, None, None, hash, row));
+        origins.push(Origin::Builtin);
     }
     let (effects, _) = effect_corpus();
     for row in effects {
@@ -431,6 +451,7 @@ pub fn manifest() -> Manifest {
         let display = row["display_name"].as_str().unwrap_or(&name).to_string();
         let hash = of_effect(&row);
         records.push(record("effect", name, &display, None, None, hash, row));
+        origins.push(Origin::Builtin);
     }
 
     // Scripts: the shipped CPU scripts and the Rhai examples.
@@ -454,9 +475,10 @@ pub fn manifest() -> Manifest {
         let description = (!entry.description.trim().is_empty()).then(|| entry.description.clone());
         let hash = of_script(&entry.source);
         records.push(record(kind, name, &entry.title, description, credit, hash, json!({ "source": entry.source })));
+        origins.push(Origin::Script(entry.file.clone()));
     }
 
-    Manifest { records, notes }
+    Manifest { records, origins, notes }
 }
 
 #[cfg(test)]
@@ -489,6 +511,7 @@ mod tests {
     #[test]
     fn the_manifest_names_every_item_once() {
         let m = manifest();
+        assert_eq!(m.origins.len(), m.records.len(), "an origin a record");
         let mut seen = std::collections::HashSet::new();
         for r in &m.records {
             let key = format!("{}/{}", r["kind"].as_str().unwrap(), r["name"].as_str().unwrap().to_lowercase());
