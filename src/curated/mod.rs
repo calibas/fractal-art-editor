@@ -292,6 +292,21 @@ pub fn slug(name: &str, identifier: bool) -> String {
     if out.is_empty() { "item".into() } else { out }
 }
 
+/// The built-in key a script's name stands for: `burning-ship.rhai` is the
+/// Rhai of the built-in `burning_ship`, so it is curated under that key, as
+/// a built-in type names it (`formula:burning_ship`). The API pairs a
+/// built-in type with the curated script holding its key (its `/types`
+/// `script_id`); a hyphenated name left the pair apart. `None` when the
+/// name, `-` read as `_`, is no built-in of `kind`.
+fn builtin_key(kind: &str, name: &str) -> Option<String> {
+    let wanted = name.replace('-', "_").to_ascii_lowercase();
+    crate::catalog::tables()["display_names"][kind]
+        .as_object()?
+        .keys()
+        .find(|k| k.to_ascii_lowercase() == wanted)
+        .cloned()
+}
+
 /// The kinds whose canonical names are engine identifiers: no `-`.
 fn identifier_kind(kind: &str) -> bool {
     matches!(kind, "variation" | "effect")
@@ -433,7 +448,8 @@ pub fn manifest() -> Manifest {
             continue;
         };
         let stem = entry.file.trim_end_matches(".rhai");
-        let name = names.claim(kind, &slug(stem, identifier_kind(kind)), &mut notes);
+        let stem = slug(stem, identifier_kind(kind));
+        let name = names.claim(kind, &builtin_key(kind, &stem).unwrap_or(stem), &mut notes);
         let credit = (!entry.author.trim().is_empty()).then(|| entry.author.clone());
         let description = (!entry.description.trim().is_empty()).then(|| entry.description.clone());
         let hash = of_script(&entry.source);
@@ -486,5 +502,20 @@ mod tests {
         assert!(count("palette") >= 700, "the packs: {}", count("palette"));
         assert!(count("variation") >= 640);
         assert!(count("generator") > 0 && count("formula") > 0);
+    }
+
+    /// A script named for a built-in is curated under the built-in's key,
+    /// which the API pairs it by: `burning_ship`, not `burning-ship`.
+    #[test]
+    fn scripts_named_for_a_builtin_take_its_key() {
+        let m = manifest();
+        let name_of = |kind: &str, want: &str| m.records.iter().any(|r| r["kind"] == kind && r["name"] == want);
+        assert!(name_of("formula", "burning_ship") && name_of("coloring", "orbit_trap") && name_of("formula", "mandelbrot"));
+        for r in &m.records {
+            let (kind, name) = (r["kind"].as_str().unwrap(), r["name"].as_str().unwrap());
+            if let Some(key) = builtin_key(kind, name) {
+                assert_eq!(name, key, "{kind}/{name} is the built-in {key}'s");
+            }
+        }
     }
 }
