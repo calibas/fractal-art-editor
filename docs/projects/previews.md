@@ -1,8 +1,10 @@
 # Previews on the server
 
-**Status 2026-11-27:** steps 1-4 built, on branch `previews` here and in
-ffapi (ffapi's sits on `builtin-type-scripts` and `security-deps`). Tried
-against the development database:
+**Status 2026-11-27:** steps 1-4 built and ffapi's merged; this repo's on
+branch `previews`. Section 4 (script parameters and every built-in's
+twin, "a kind of preview") built on the same branch here and on ffapi's
+`script-parameters`, neither merged. Tried against the development
+database:
 - **Rendered:** 928 pictures of 931 planned, in a few minutes. The
   slowest are the simulations. The three tracks have no Catalog picture.
 - **Blank:** 64 of the 928 came out blank and are not kept or uploaded
@@ -120,6 +122,64 @@ planning on creating them locally and uploading via the API."
 5. Docs: BROWSER_APP_0.6.md (where `preview_url` and the fallback come
    from), RELEASE.md (a step after the curated sync: `export_previews
    --upload`), this doc's status.
+
+## 4. Script parameters, and a twin for every built-in
+
+**The ask, from the browser:** show a script's parameters as it shows a
+variation's and an effect's, and a definition for every built-in: only 5
+of about 116 built-ins had a curated Rhai twin, scripts came without
+parameters, and the browser cannot collect a GPU kind's.
+
+**Decided (the user, 2026-11-27):**
+1. The examples that hold a built-in's key move aside, as
+   `<name>-example`, so the twins take the keys.
+2. Parameters reuse the variations' and effects' way: a `parameters`
+   column on scripts, the same `Parameter` shape, written by
+   `params::api_json`.
+
+**Built:**
+- **Here:**
+  - `storage::library::param_defs(kind, source)`: any Rhai file's
+    parameters by its kind's rules, registering nothing (a GPU kind's
+    through `escape::custom::check_entry` and `ir::Program::param_defs`,
+    a complex parameter split as the kind splits it; a track's `PARAMS`;
+    a CPU script's collected declarations).
+  - `api_parameters` / `api_parameter`: each as `params::api_json`, a
+    text's or colour's default as itself.
+  - The curated manifest gives every script record `content.parameters`,
+    and curates the twin of every escape and simulation built-in under its
+    key (`curated::twins`: 26 formulas, 28 colourings, 4 solids, 3
+    fields, 3 field colourings, 31 models, 13 simulation colourings; 108
+    in all), named and described as the built-in type is, origin
+    `Origin::Twin`. The preview exporter draws a twin as its built-in.
+    The seven flame-backed built-ins (`ifs_flame`, `ifs_flame_3d`, five
+    `ifs_*` colourings) have no twin. The variations' and effects' twins
+    stay out: those names are the WGSL catalog's.
+  - Examples named for a built-in are `mandelbrot-example`,
+    `burning-ship-example`, `phoenix-example`, `smooth-example`,
+    `orbit-trap-example` (replacing the `builtin_key` naming of
+    2026-11-27's earlier commit).
+  - The app's own uploads send `parameters` (`api::entries`,
+    `api::sync::script_to_create_request`).
+- **ffapi (`script-parameters`):**
+  - migration 124, `scripts.parameters`, which `curated_static` lets
+    change (derived, not content);
+  - create and update store it (an update without it clears it; at most
+    256 entries, 64 KiB, each named); the detail serves it;
+  - the import stores it and refreshes an unchanged, restored or
+    taken-over row's;
+  - a `coloring` built-in type pairs with, and takes the preview of, the
+    `field_coloring` of its key;
+  - BROWSER_APP_0.6.md and curated-build.md.
+
+**After merging both,** the local sync (`export_curated_json`, then
+`sync_curated.py --write`) reports, for scripts: the twins `created`;
+the five built-in keys whose example was curated there (`mandelbrot`,
+`burning_ship`, `phoenix`, `smooth`, `orbit_trap`) `new_version`, the
+example kept as the older version; the five examples `created` under
+their new names; everything else `unchanged`, with its parameters filled
+in. Then `export_previews --upload` sends the five new example names'
+pictures.
 
 ## 5. Blank pictures: the Catalog's previews to fix
 

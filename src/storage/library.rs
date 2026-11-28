@@ -238,6 +238,12 @@ fn script_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry {
     }
 }
 
+/// A shipped Rhai file the stores do not list (a built-in's escape twin,
+/// `escape::twins`), read as a formula store file is.
+pub fn shipped_entry(file: &str, source: &str) -> Entry {
+    formula_entry(file, source, Origin::Builtin, Link::default())
+}
+
 /// A formula store file: a Rhai one read for its kind and `INFO`, a UF or
 /// Fractint one by its extension.
 fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry {
@@ -402,6 +408,69 @@ pub fn forget(file: &str) {
     if let Ok(mut cache) = compiled_cache().lock() {
         cache.retain(|(shipped, f, _), _| *shipped || f != file);
     }
+}
+
+/// A Rhai file's parameters as its kind takes them -- what the app draws
+/// for it once it is used -- read without registering anything: a GPU
+/// kind's from its compiled program (`ir::Program::param_defs`, a complex
+/// parameter split in two as the kind splits it: `c.re`, `c.im`; a
+/// variation's `c_re`), a track's `PARAMS`, a CPU script's declarations
+/// (collected, not run). What a published script carries as `parameters`
+/// (`params::api_json` each; `curated::manifest`, the Scripts panel's
+/// upload). A library declares none.
+pub fn param_defs(kind: Kind, source: &str) -> Result<Vec<crate::params::ParamDef>, String> {
+    use crate::lang::{ir::ComplexParams, EntryKind};
+    let entry = match kind {
+        Kind::Generator | Kind::Modifier => return crate::script::headless::param_defs(source),
+        Kind::Track => return crate::animation::script::declare(source).map(|d| d.params),
+        Kind::Formula => EntryKind::Formula,
+        Kind::Coloring => EntryKind::Coloring,
+        Kind::Variation => EntryKind::Transform,
+        Kind::Solid => EntryKind::Solid,
+        Kind::Effect => EntryKind::Effect,
+        Kind::SimColoring => EntryKind::SimColoring,
+        Kind::SimModel => EntryKind::SimModel,
+        Kind::Field => EntryKind::Field,
+        Kind::FieldColoring => EntryKind::FieldColoring,
+        Kind::ScriptLibrary | Kind::UfFormulas | Kind::UfColorings | Kind::Fractint | Kind::Unknown => return Ok(Vec::new()),
+    };
+    let src = crate::config::escape::CustomSource {
+        dialect: crate::config::escape::CustomDialect::Rhai,
+        entry: String::new(),
+        source: source.to_string(),
+        variations: Vec::new(),
+    };
+    let program = crate::escape::custom::check_entry(entry, &src).map_err(|d| {
+        d.iter()
+            .find(|x| x.severity == crate::lang::Severity::Error)
+            .map(|x| x.render(source))
+            .unwrap_or_else(|| "it does not compile".to_string())
+    })?;
+    match kind {
+        Kind::Variation => crate::variations::custom::param_defs(&program, source),
+        Kind::Effect | Kind::SimModel | Kind::SimColoring => program.param_defs(ComplexParams::Refuse("its parameters are real")),
+        _ => program.param_defs(ComplexParams::Split(".")),
+    }
+}
+
+/// [`param_defs`] as the API spells a script's `parameters`: each in the
+/// variations' and effects' shape (`params::api_json`), with a text's or
+/// a colour's default as itself (a string, `[r, g, b]`), which the
+/// float-only shape cannot hold.
+pub fn api_parameters(kind: Kind, source: &str) -> Result<Vec<serde_json::Value>, String> {
+    Ok(param_defs(kind, source)?.iter().map(api_parameter).collect())
+}
+
+/// One parameter of [`api_parameters`].
+pub fn api_parameter(d: &crate::params::ParamDef) -> serde_json::Value {
+    use crate::params::ParamKind;
+    let mut v = crate::params::api_json(d);
+    match &d.kind {
+        ParamKind::Text { default, .. } => v["default_value"] = default.to_string().into(),
+        ParamKind::Color { default } => v["default_value"] = serde_json::json!(default),
+        _ => {}
+    }
+    v
 }
 
 fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {

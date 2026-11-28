@@ -292,12 +292,12 @@ pub fn slug(name: &str, identifier: bool) -> String {
     if out.is_empty() { "item".into() } else { out }
 }
 
-/// The built-in key a script's name stands for: `burning-ship.rhai` is the
-/// Rhai of the built-in `burning_ship`, so it is curated under that key, as
-/// a built-in type names it (`formula:burning_ship`). The API pairs a
-/// built-in type with the curated script holding its key (its `/types`
-/// `script_id`); a hyphenated name left the pair apart. `None` when the
-/// name, `-` read as `_`, is no built-in of `kind`.
+/// The built-in key a script's name would take: `burning-ship.rhai` reads
+/// as the built-in `burning_ship`. The key is its twin's (the API pairs a
+/// built-in type with the curated script holding its key: its `/types`
+/// `script_id`), so an example named for a built-in is curated as
+/// `burning-ship-example`. `None` when the name, `-` read as `_`, is no
+/// built-in of `kind`.
 fn builtin_key(kind: &str, name: &str) -> Option<String> {
     let wanted = name.replace('-', "_").to_ascii_lowercase();
     crate::catalog::tables()["display_names"][kind]
@@ -333,6 +333,9 @@ pub enum Origin {
     Builtin,
     /// A shipped script or Rhai example, by its file name.
     Script(String),
+    /// A built-in's Rhai twin, under the built-in's key: its picture is
+    /// the built-in's.
+    Twin,
 }
 
 /// Names taken in a kind's namespace, compared without case: a duplicate
@@ -372,11 +375,46 @@ fn record(kind: &str, name: String, display_name: &str, description: Option<Stri
     })
 }
 
+/// The built-ins whose Rhai twins are curated, each under its key, by the
+/// API's script kind: every escape and simulation built-in with a twin
+/// (the flame-backed ones, `ifs_*`, have none). A variation's and an
+/// effect's twins are left out: those namespaces are the WGSL catalog's,
+/// which the manifest's own records fill.
+#[cfg(not(target_arch = "wasm32"))]
+fn twins() -> Vec<(&'static str, &'static str, &'static str)> {
+    use crate::escape::twins as t;
+    let lists: [(&str, &[(&str, &str)]); 7] = [
+        ("formula", t::TWINS),
+        ("coloring", t::COLORING_TWINS),
+        ("solid", t::SOLID_TWINS),
+        ("field", t::FIELD_TWINS),
+        ("field_coloring", t::FIELD_COLORING_TWINS),
+        ("sim_model", crate::sim::custom::SHIPPED_MODELS),
+        ("sim_coloring", crate::sim::custom::SHIPPED),
+    ];
+    lists.iter().flat_map(|(kind, list)| list.iter().map(move |(key, source)| (*kind, *key, *source))).collect()
+}
+
+/// A script record's content: its source and its parameters as the API
+/// spells them (`library::api_parameters`; a note, and none, when they do
+/// not read).
+#[cfg(not(target_arch = "wasm32"))]
+fn script_content(kind: &str, name: &str, source: &str, notes: &mut Vec<String>) -> Value {
+    let read = crate::storage::library::Kind::from_wire(kind)
+        .ok_or_else(|| "an unknown kind".to_string())
+        .and_then(|k| crate::storage::library::api_parameters(k, source));
+    match read {
+        Ok(parameters) => json!({ "source": source, "parameters": parameters }),
+        Err(e) => {
+            notes.push(format!("{kind}/{name}: its parameters did not read: {e}"));
+            json!({ "source": source })
+        }
+    }
+}
+
 /// The manifest: the presets (fractals of every engine), the palette
-/// packs, the shipped scripts and Rhai examples, and the built-in
-/// variations and effects. The built-ins' Rhai twins are left out: their
-/// names are the built-ins' own, which the API's shared namespaces give to
-/// the WGSL catalog.
+/// packs, the built-in variations and effects, the built-ins' Rhai twins
+/// ([`twins`]), and the shipped scripts and Rhai examples.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn manifest() -> Manifest {
     let mut records = Vec::new();
@@ -454,6 +492,25 @@ pub fn manifest() -> Manifest {
         origins.push(Origin::Builtin);
     }
 
+    // The built-ins' twins, under their keys, before the examples, so an
+    // example named for a built-in yields the key to it. Named as the
+    // built-in type is, described by its prose.
+    let tables = crate::catalog::tables();
+    for (kind, key, source) in twins() {
+        let table = if kind == "field_coloring" { "coloring" } else { kind };
+        let entry = crate::storage::library::shipped_entry(&format!("{key}.rhai"), source);
+        let display = tables["display_names"][table][key].as_str().map(str::to_string).unwrap_or(entry.title.clone());
+        let description = tables["prose"][table][key]["description"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| (!entry.description.trim().is_empty()).then(|| entry.description.clone()));
+        let credit = (!entry.author.trim().is_empty()).then(|| entry.author.clone());
+        let name = names.claim(kind, key, &mut notes);
+        let content = script_content(kind, &name, source, &mut notes);
+        records.push(record(kind, name, &display, description, credit, of_script(source), content));
+        origins.push(Origin::Twin);
+    }
+
     // Scripts: the shipped CPU scripts and the Rhai examples.
     let shipped: Vec<&str> = crate::script::library::EMBEDDED
         .iter()
@@ -470,11 +527,13 @@ pub fn manifest() -> Manifest {
         };
         let stem = entry.file.trim_end_matches(".rhai");
         let stem = slug(stem, identifier_kind(kind));
-        let name = names.claim(kind, &builtin_key(kind, &stem).unwrap_or(stem), &mut notes);
+        let stem = if builtin_key(kind, &stem).is_some() { format!("{stem}-example") } else { stem };
+        let name = names.claim(kind, &stem, &mut notes);
         let credit = (!entry.author.trim().is_empty()).then(|| entry.author.clone());
         let description = (!entry.description.trim().is_empty()).then(|| entry.description.clone());
         let hash = of_script(&entry.source);
-        records.push(record(kind, name, &entry.title, description, credit, hash, json!({ "source": entry.source })));
+        let content = script_content(kind, &name, &entry.source, &mut notes);
+        records.push(record(kind, name, &entry.title, description, credit, hash, content));
         origins.push(Origin::Script(entry.file.clone()));
     }
 
@@ -527,18 +586,27 @@ mod tests {
         assert!(count("generator") > 0 && count("formula") > 0);
     }
 
-    /// A script named for a built-in is curated under the built-in's key,
-    /// which the API pairs it by: `burning_ship`, not `burning-ship`.
+    /// Every built-in with a twin is curated under its key (the API pairs
+    /// a built-in type with it), the twin's source and parameters; an
+    /// example named for a built-in is `-example`.
     #[test]
-    fn scripts_named_for_a_builtin_take_its_key() {
+    fn twins_take_the_builtin_keys() {
         let m = manifest();
-        let name_of = |kind: &str, want: &str| m.records.iter().any(|r| r["kind"] == kind && r["name"] == want);
-        assert!(name_of("formula", "burning_ship") && name_of("coloring", "orbit_trap") && name_of("formula", "mandelbrot"));
-        for r in &m.records {
-            let (kind, name) = (r["kind"].as_str().unwrap(), r["name"].as_str().unwrap());
-            if let Some(key) = builtin_key(kind, name) {
-                assert_eq!(name, key, "{kind}/{name} is the built-in {key}'s");
+        let find = |kind: &str, want: &str| m.records.iter().zip(&m.origins).find(|(r, _)| r["kind"] == kind && r["name"] == want);
+        for (kind, key, source) in twins() {
+            let (r, o) = find(kind, key).unwrap_or_else(|| panic!("{kind}/{key} curated"));
+            assert_eq!((o, r["content"]["source"].as_str()), (&Origin::Twin, Some(source)), "{kind}/{key}");
+            assert!(r["content"]["parameters"].is_array(), "{kind}/{key}: {:?}", m.notes);
+        }
+        assert!(find("formula", "burning-ship-example").is_some() && find("coloring", "orbit-trap-example").is_some());
+        for (r, o) in m.records.iter().zip(&m.origins) {
+            if let Origin::Script(_) = o {
+                assert!(r["content"]["parameters"].is_array(), "{}/{}: {:?}", r["kind"], r["name"], m.notes);
             }
         }
+        // The shape the variations' are in.
+        let (mandelbrot, _) = find("formula", "mandelbrot").unwrap();
+        let params = mandelbrot["content"]["parameters"].as_array().unwrap();
+        assert!(params.iter().all(|p| p["name"].is_string() && p["display_name"].is_string() && !p["param_type"].is_null()), "{params:?}");
     }
 }

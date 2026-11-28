@@ -121,6 +121,12 @@ pub fn params(source: &str) -> Result<Value, String> {
     }))
 }
 
+/// A script's declared parameters, collected without running it for real.
+pub fn param_defs(source: &str) -> Result<Vec<crate::params::ParamDef>, String> {
+    let base = FractalConfig::default();
+    with_host(|h| h.collect(source, &base)).map(|m| m.params).map_err(|e| e.to_string())
+}
+
 /// What a run made: a report per stage (`{name, kind, warnings,
 /// messages}`), the config, and the animation the last stage to define
 /// one defined.

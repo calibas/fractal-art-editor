@@ -149,7 +149,8 @@ fn plan(entries: &[Entry], only: Option<&str>) -> Vec<Planned> {
                     add(Planned { kind, name, how: How::Entry(i) }, &mut out);
                 }
             }
-            crate::curated::Origin::Builtin | crate::curated::Origin::Palette => {}
+            // A twin's picture is its built-in's, planned above by its key.
+            crate::curated::Origin::Builtin | crate::curated::Origin::Twin | crate::curated::Origin::Palette => {}
         }
     }
     out.retain(|p| match only {
@@ -336,7 +337,7 @@ mod tests {
         assert!(has("sim_model", "gray_scott") && has("generator", "basic_random"));
         let manifest = crate::curated::manifest();
         for (r, o) in manifest.records.iter().zip(&manifest.origins) {
-            if matches!(o, crate::curated::Origin::Preset(_) | crate::curated::Origin::Script(_)) {
+            if matches!(o, crate::curated::Origin::Preset(_) | crate::curated::Origin::Script(_) | crate::curated::Origin::Twin) {
                 let (k, n) = (r["kind"].as_str().unwrap(), r["name"].as_str().unwrap());
                 assert!(has(k, n), "{k}/{n} has a planned picture");
             }

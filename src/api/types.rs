@@ -873,6 +873,12 @@ pub struct ScriptCreateRequest {
     /// gives one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Its parameters as the variations' are spelled
+    /// (`storage::library::api_parameters`), for a reader that does not
+    /// run the source; the server stores them as sent. Absent when they
+    /// did not read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Vec<serde_json::Value>>,
 }
 
 /// The body of a `409 Conflict`: somebody else wrote first.
@@ -1211,6 +1217,7 @@ mod tests {
             visibility: None,
             version: Some(4),
             id: None,
+            parameters: None,
         };
         let sent = serde_json::to_value(&req).unwrap();
         assert_eq!(sent["revision"], 4);

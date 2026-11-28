@@ -99,6 +99,7 @@ pub fn create_request(
         visibility,
         version,
         id: Some(id),
+        parameters: library::api_parameters(kind, source).ok(),
     })
 }
 

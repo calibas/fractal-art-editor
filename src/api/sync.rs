@@ -947,6 +947,7 @@ pub fn script_to_create_request(
         visibility,
         version,
         id: None,
+        parameters: Some(meta.params.iter().map(crate::storage::library::api_parameter).collect()),
     })
 }
 
