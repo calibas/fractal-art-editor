@@ -134,17 +134,11 @@ fn plan(entries: &[Entry], only: Option<&str>) -> Vec<Planned> {
             crate::curated::Origin::Script(file) => {
                 // A shipped file the Catalog lists, of the record's kind (two
                 // stores can ship one file name: the `kaleidoscope.rhai`
-                // modifier and effect); or a built-in's twin,
-                // which it does not (the built-in's entry stands for it:
-                // `kaleidoscope.rhai`, `sim-gray_scott.rhai`) -- the same
-                // picture.
-                let stem = file.trim_end_matches(".rhai");
-                let stem = stem.strip_prefix("sim-").unwrap_or(stem);
+                // modifier, and the effect's twin the Catalog hides).
                 let kind = record["kind"].as_str().unwrap_or_default();
                 let found = entries
                     .iter()
-                    .position(|e| matches!(&e.key, EntryKey::File { file: f, shipped: true, .. } if f == file) && api_kind(e.kind) == Some(kind))
-                    .or_else(|| entries.iter().position(|e| matches!(&e.key, EntryKey::Registered(_, n) if n == stem) && api_kind(e.kind) == Some(kind)));
+                    .position(|e| matches!(&e.key, EntryKey::File { file: f, shipped: true, .. } if f == file) && api_kind(e.kind) == Some(kind));
                 if let Some((i, kind)) = found.and_then(|i| Some((i, api_kind(entries[i].kind)?))) {
                     add(Planned { kind, name, how: How::Entry(i) }, &mut out);
                 }

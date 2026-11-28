@@ -511,14 +511,17 @@ pub fn manifest() -> Manifest {
         origins.push(Origin::Twin);
     }
 
-    // Scripts: the shipped CPU scripts and the Rhai examples.
-    let shipped: Vec<&str> = crate::script::library::EMBEDDED
+    // Scripts: the shipped CPU scripts and the Rhai examples, by store and
+    // file: a built-in effect's twin, which the scan lists in the formula
+    // store, shares `kaleidoscope.rhai` with a CPU modifier.
+    use crate::storage::library::Store;
+    let shipped: Vec<(Store, &str)> = crate::script::library::EMBEDDED
         .iter()
-        .map(|(f, _)| *f)
-        .chain(crate::storage::formula_store::EXAMPLES.iter().map(|(f, _)| *f))
+        .map(|(f, _)| (Store::Scripts, *f))
+        .chain(crate::storage::formula_store::EXAMPLES.iter().map(|(f, _)| (Store::Formulas, *f)))
         .collect();
     for entry in crate::storage::library::scan() {
-        if entry.origin != crate::provenance::Origin::Builtin || !shipped.contains(&entry.file.as_str()) {
+        if entry.origin != crate::provenance::Origin::Builtin || !shipped.contains(&(entry.store, entry.file.as_str())) {
             continue;
         }
         let Some(kind) = entry.kind.wire() else {
@@ -527,7 +530,8 @@ pub fn manifest() -> Manifest {
         };
         let stem = entry.file.trim_end_matches(".rhai");
         let stem = slug(stem, identifier_kind(kind));
-        let stem = if builtin_key(kind, &stem).is_some() { format!("{stem}-example") } else { stem };
+        let sep = if identifier_kind(kind) { '_' } else { '-' };
+        let stem = if builtin_key(kind, &stem).is_some() { format!("{stem}{sep}example") } else { stem };
         let name = names.claim(kind, &stem, &mut notes);
         let credit = (!entry.author.trim().is_empty()).then(|| entry.author.clone());
         let description = (!entry.description.trim().is_empty()).then(|| entry.description.clone());
@@ -599,6 +603,11 @@ mod tests {
             assert!(r["content"]["parameters"].is_array(), "{kind}/{key}: {:?}", m.notes);
         }
         assert!(find("formula", "burning-ship-example").is_some() && find("coloring", "orbit-trap-example").is_some());
+        // A built-in effect's twin stays out, though a CPU modifier shares
+        // its file name; the modifier is in.
+        assert!(m.records.iter().all(|r| r["kind"] != "effect" || r["name"].as_str().unwrap().chars().all(|c| c != '-')));
+        assert!(find("modifier", "kaleidoscope").is_some());
+        assert_eq!(m.records.iter().filter(|r| r["kind"] == "effect").count(), effect_corpus().0.len());
         for (r, o) in m.records.iter().zip(&m.origins) {
             if let Origin::Script(_) = o {
                 assert!(r["content"]["parameters"].is_array(), "{}/{}: {:?}", r["kind"], r["name"], m.notes);
