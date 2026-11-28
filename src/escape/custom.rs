@@ -1739,6 +1739,51 @@ fn ball_global(p: &ir::Program) -> Option<ir::VarId> {
     p.globals.iter().copied().find(|&v| p.vars[v].name == "g_ball")
 }
 
+/// What a source is in a config's formula or colouring place
+/// (`EntryKind::Formula` / `EntryKind::Coloring`): the formula's place
+/// holds a formula, a field (mode B) or a solid (mode D), the colouring's
+/// a colouring or a field colouring -- for a Rhai source, by the
+/// functions it defines (`lang::rhai::kind_of`); any other dialect is
+/// the place's own kind. [`ensure`], the library's files and the script
+/// API route by it.
+pub fn kind_in_place(place: EntryKind, src: &CustomSource) -> EntryKind {
+    if src.dialect != CustomDialect::Rhai {
+        return place;
+    }
+    match (place, lang::rhai::kind_of(&src.source)) {
+        (EntryKind::Formula, Some(k @ (EntryKind::Field | EntryKind::Solid))) => k,
+        (EntryKind::Coloring, Some(EntryKind::FieldColoring)) => EntryKind::FieldColoring,
+        _ => place,
+    }
+}
+
+/// Compile `src` as an escape entry of `kind` and register it as `name`.
+pub fn compile_as(kind: EntryKind, src: &CustomSource, name: &str) -> Result<(), Vec<Diag>> {
+    match kind {
+        EntryKind::Formula => compile_formula(src, name).map(|_| ()),
+        EntryKind::Coloring => compile_coloring(src, name).map(|_| ()),
+        EntryKind::Field => compile_field(src, name).map(|_| ()),
+        EntryKind::FieldColoring => compile_field_coloring(src, name).map(|_| ()),
+        EntryKind::Solid => compile_solid(src, name).map(|_| ()),
+        EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => {
+            Err(vec![Diag::error(lang::Span::default(), "not a formula's or a colouring's kind")])
+        }
+    }
+}
+
+/// A source for a config's formula or colouring place, ready to carry:
+/// its kind there ([`kind_in_place`]), the variations it calls filled
+/// in (collected as that kind: a solid lowered as a formula calls
+/// none), compiled and registered under its name. Returns the kind, the
+/// name and the source the config carries.
+pub fn prepare_in_place(place: EntryKind, src: CustomSource) -> Result<(EntryKind, String, CustomSource), Vec<Diag>> {
+    let kind = kind_in_place(place, &src);
+    let src = with_called_variations(kind, src);
+    let name = name_of(kind, &src);
+    compile_as(kind, &src, &name)?;
+    Ok((kind, name, src))
+}
+
 /// Register the config's embedded sources under the names it gives
 /// them, before anything resolves those names. Cheap when they are
 /// registered already; a source that fails to compile is logged once
@@ -1765,13 +1810,8 @@ pub fn ensure(escape: &EscapeConfig) {
         if known || registry().read().is_ok_and(|r| r.failed.contains(name)) {
             continue;
         }
-        let is = |k: EntryKind| src.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&src.source) == Some(k);
         let result = match kind {
-            EntryKind::Formula if is(EntryKind::Solid) => compile_solid(src, name).map(|_| ()),
-            EntryKind::Formula if is(EntryKind::Field) => compile_field(src, name).map(|_| ()),
-            EntryKind::Formula => compile_formula(src, name).map(|_| ()),
-            EntryKind::Coloring if is(EntryKind::FieldColoring) => compile_field_coloring(src, name).map(|_| ()),
-            EntryKind::Coloring => compile_coloring(src, name).map(|_| ()),
+            EntryKind::Formula | EntryKind::Coloring => compile_as(kind_in_place(kind, src), src, name),
             EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => Ok(()),
         };
         if let Err(diags) = result {

@@ -500,14 +500,7 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             };
             let src = custom::with_called_variations(ek, CustomSource { dialect: CustomDialect::Rhai, entry: title.to_string(), source: source.to_string(), variations: Vec::new() });
             let name = custom::name_of(ek, &src);
-            let compiled = match ek {
-                EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
-                EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
-                EntryKind::Field => custom::compile_field(&src, &name).map(|_| ()),
-                EntryKind::FieldColoring => custom::compile_field_coloring(&src, &name).map(|_| ()),
-                _ => custom::compile_solid(&src, &name).map(|_| ()),
-            };
-            compiled.map_err(|d| d.first().map(|x| x.render(source)).unwrap_or_else(|| "it does not compile".to_string()))?;
+            custom::compile_as(ek, &src, &name).map_err(|d| d.first().map(|x| x.render(source)).unwrap_or_else(|| "it does not compile".to_string()))?;
             Ok((name, src))
         }
         Kind::SimColoring => {
