@@ -353,3 +353,15 @@ async fn a_config_naming_what_cannot_be_drawn_is_refused() {
     let err = fae_render::render_impl(&broken.to_string(), 32, 32, None, None).await.err().expect("refused");
     assert!(err.contains("did not compile") && err.contains("3:"), "{err}");
 }
+
+/// `compile()` checks a source without a GPU: a clean one with its
+/// parameters, a broken one with where it is.
+#[test]
+fn compile_reports_errors_and_parameters() {
+    let ok: serde_json::Value = serde_json::from_str(&fae_render::compile_impl("coloring", include_str!("../../../assets/formulas/twins/colorings/smooth.rhai"))).unwrap();
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert!(!ok["parameters"].as_array().unwrap().is_empty());
+    let broken = "fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\nfn step(s, p) {\n    s.z = s.z * s.z + nonsense;\n    s\n}\nfn escaped(s, p) { s.z.norm_sqr() > 4.0 }\n";
+    let bad: serde_json::Value = serde_json::from_str(&fae_render::compile_impl("", broken)).unwrap();
+    assert_eq!((bad["ok"].as_bool(), bad["kind"].as_str(), bad["errors"][0]["line"].as_u64()), (Some(false), Some("formula"), Some(3)), "{bad}");
+}

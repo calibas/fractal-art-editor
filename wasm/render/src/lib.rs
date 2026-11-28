@@ -202,6 +202,12 @@ pub async fn probe_impl() -> Result<String, String> {
     Ok(report.to_string())
 }
 
+/// Check a Rhai source as the Formula Editor does before Use, needing
+/// no GPU (`fae::storage::library::compile_json`).
+pub fn compile_impl(kind: &str, source: &str) -> String {
+    fae::storage::library::compile_json(kind, source)
+}
+
 /// What the renderer asks of a GPU, as JSON in WebGPU's names, needing
 /// no GPU: for a page's own check before it downloads this module
 /// (`fae::gpu::requirements::requirements_json`).
@@ -420,6 +426,19 @@ mod wasm {
         };
         log::set_max_level(filter);
         Ok(())
+    }
+
+    /// Check a Rhai source as the desktop Formula Editor does before
+    /// Use, without rendering: `kind` the API's name for it
+    /// ("formula", "coloring", "field", "field_coloring", "solid",
+    /// "sim_model", "sim_coloring", "variation", "effect", "track",
+    /// "generator", "modifier", "library"), or "" to read it from the
+    /// source. JSON: `{ ok, kind, title, errors: [{ line, column,
+    /// message, stage }], warnings, parameters }` -- `parameters` in the
+    /// API's shape, what a script published from the source carries.
+    #[wasm_bindgen]
+    pub fn compile(kind: &str, source: &str) -> String {
+        crate::compile_impl(kind, source)
     }
 
     /// What the renderer asks of a GPU, as JSON in WebGPU's names

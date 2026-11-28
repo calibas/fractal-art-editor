@@ -473,6 +473,222 @@ pub fn api_parameter(d: &crate::params::ParamDef) -> serde_json::Value {
     v
 }
 
+/// One thing a [`check`] found wrong, where in the source when it is
+/// known (1-based), and at which stage: `"kind"` (the source is another
+/// kind than the one asked for), `"check"` (the language: parsing, names,
+/// types), `"build"` (the kind's own compile: a variation's, an effect's
+/// or a simulation's module, a solid's walk, a colouring that colours
+/// nothing).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Problem {
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub message: String,
+    pub stage: &'static str,
+}
+
+impl Problem {
+    fn at(source: &str, d: &crate::lang::Diag, stage: &'static str) -> Self {
+        let (line, column) = crate::lang::line_col(source, d.span.start);
+        Problem { line: Some(line), column: Some(column), message: d.message.clone(), stage }
+    }
+
+    /// From a message the compilers render as `line:col: error: text`, or
+    /// a plain one.
+    fn rendered(message: &str, stage: &'static str) -> Self {
+        let parsed = (|| {
+            let (line, rest) = message.split_once(':')?;
+            let (column, rest) = rest.split_once(':')?;
+            let text = rest.trim_start().strip_prefix("error:").unwrap_or(rest).trim_start();
+            Some((line.trim().parse().ok()?, column.trim().parse().ok()?, text.to_string()))
+        })();
+        match parsed {
+            Some((line, column, text)) => Problem { line: Some(line), column: Some(column), message: text, stage },
+            None => Problem { line: None, column: None, message: message.to_string(), stage },
+        }
+    }
+
+    /// As the Formula Editor lists it: `line:col: error: text`, or the
+    /// text alone without a position.
+    pub fn render(&self) -> String {
+        match (self.line, self.column) {
+            (Some(l), Some(c)) => format!("{l}:{c}: error: {}", self.message),
+            _ => self.message.clone(),
+        }
+    }
+}
+
+/// What [`check`] found: the source's kind (as asked for, else as read),
+/// its title, its problems, and -- when there are none -- its parameters
+/// as a published script carries them ([`api_parameters`]).
+#[derive(Debug, Clone)]
+pub struct Checked {
+    pub kind: Kind,
+    pub title: Option<String>,
+    pub errors: Vec<Problem>,
+    pub parameters: Vec<serde_json::Value>,
+}
+
+impl Checked {
+    /// The report as JSON, the gallery modules' `compile()`:
+    /// `{ ok, kind, title, errors: [{ line, column, message, stage }],
+    /// warnings: [], parameters: [...] }`.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "ok": self.errors.is_empty(),
+            "kind": self.kind.wire(),
+            "title": self.title,
+            "errors": self.errors.iter().map(|p| serde_json::json!({
+                "line": p.line, "column": p.column, "message": p.message, "stage": p.stage,
+            })).collect::<Vec<_>>(),
+            "warnings": [],
+            "parameters": self.parameters,
+        })
+    }
+}
+
+/// Check a Rhai source as the Formula Editor checks it before Use: the
+/// language, then what its kind builds -- everything short of rendering.
+/// `expected` is the kind it is to be (a script's published kind);
+/// `None` reads it from the source. Registers nothing, so it can run on
+/// every keystroke. A shader the compiler produced that a GPU refuses is
+/// not found here (the web build has no WGSL validator): a render reports
+/// that.
+pub fn check(source: &str, expected: Option<Kind>) -> Checked {
+    let mut checked = check_only(source, expected);
+    if checked.errors.is_empty() {
+        match api_parameters(checked.kind, source) {
+            Ok(p) => checked.parameters = p,
+            Err(e) => checked.errors.push(Problem::rendered(&e, "build")),
+        }
+    }
+    checked
+}
+
+/// [`check`] for a page, the gallery modules' `compile(kind, source)`:
+/// `kind` a published kind's name (`"formula"`, `"field_coloring"`,
+/// `"generator"` ... as the API spells them), or empty to read it from
+/// the source. The report as JSON ([`Checked::to_json`]); a kind this
+/// build does not know is a report too, not an error.
+pub fn compile_json(kind: &str, source: &str) -> String {
+    let expected = match kind.trim() {
+        "" => None,
+        wire => match Kind::from_wire(wire) {
+            Some(k) => Some(k),
+            None => {
+                let known: Vec<&str> = ALL_PUBLISHED.iter().filter_map(|k| k.wire()).collect();
+                return serde_json::json!({
+                    "ok": false,
+                    "kind": serde_json::Value::Null,
+                    "title": serde_json::Value::Null,
+                    "errors": [{ "line": null, "column": null, "stage": "kind",
+                        "message": format!("no kind `{wire}`: {}", known.join(", ")) }],
+                    "warnings": [],
+                    "parameters": [],
+                })
+                .to_string();
+            }
+        },
+    };
+    check(source, expected).to_json().to_string()
+}
+
+/// [`check`] without the parameters: what the Formula Editor lists as it
+/// is typed in.
+pub fn check_only(source: &str, expected: Option<Kind>) -> Checked {
+    use crate::lang::EntryKind;
+    let read = rhai_kind(source);
+    let kind = expected.unwrap_or(read);
+    let mut errors = Vec::new();
+    let mut title = crate::lang::rhai::title(source);
+    if read.is_entry() && read != kind {
+        let wire = |k: Kind| k.wire().unwrap_or("unknown");
+        errors.push(Problem {
+            line: None,
+            column: None,
+            message: format!("this source is a {} by its functions, not a {}", wire(read), wire(kind)),
+            stage: "kind",
+        });
+        return Checked { kind, title, errors, parameters: Vec::new() };
+    }
+    let entry = match kind {
+        Kind::Formula => Some(EntryKind::Formula),
+        Kind::Coloring => Some(EntryKind::Coloring),
+        Kind::Variation => Some(EntryKind::Transform),
+        Kind::Solid => Some(EntryKind::Solid),
+        Kind::Effect => Some(EntryKind::Effect),
+        Kind::SimColoring => Some(EntryKind::SimColoring),
+        Kind::SimModel => Some(EntryKind::SimModel),
+        Kind::Field => Some(EntryKind::Field),
+        Kind::FieldColoring => Some(EntryKind::FieldColoring),
+        Kind::Generator | Kind::Modifier | Kind::Track | Kind::ScriptLibrary => None,
+        Kind::UfFormulas | Kind::UfColorings | Kind::Fractint | Kind::Unknown => {
+            errors.push(Problem {
+                line: None,
+                column: None,
+                message: "not a Rhai entry this build knows: a formula has `fn step`, a colouring `fn finish`, a variation `fn variation` ...".to_string(),
+                stage: "kind",
+            });
+            return Checked { kind, title, errors, parameters: Vec::new() };
+        }
+    };
+    if let Some(entry) = entry {
+        let src = crate::config::escape::CustomSource {
+            dialect: crate::config::escape::CustomDialect::Rhai,
+            entry: String::new(),
+            source: source.to_string(),
+            variations: Vec::new(),
+        };
+        match crate::escape::custom::check_entry(entry, &src) {
+            Err(diags) => {
+                errors.extend(diags.iter().filter(|d| d.severity == crate::lang::Severity::Error).map(|d| Problem::at(source, d, "check")));
+            }
+            Ok(program) => {
+                title = Some(program.name.clone());
+                let built: Result<(), String> = match kind {
+                    // A colouring that sets no index draws nothing.
+                    Kind::Coloring if !crate::lang::wgsl::colours_anything(&program) => Err(t!("formula_editor.colours_nothing").to_string()),
+                    // A transformation becomes a variation, under the id
+                    // Use gives it when it needs one.
+                    Kind::Variation => {
+                        let with_id = if crate::variations::custom::needs_id(source) {
+                            crate::lang::rhai::with_own_id(source, &crate::scripted::mint_id())
+                        } else {
+                            source.to_string()
+                        };
+                        crate::variations::custom::compile(&with_id).map(|_| ())
+                    }
+                    Kind::Effect => {
+                        let with_id = crate::lang::rhai::with_own_id(source, &crate::scripted::mint_id());
+                        crate::effects::custom::compile(&with_id, crate::provenance::Provenance::Local).map(|_| ())
+                    }
+                    Kind::SimColoring => crate::sim::custom::compile(source, "custom-check").map(|_| ()),
+                    Kind::SimModel => crate::sim::custom::compile_model(source, "custom-check").map(|_| ()),
+                    Kind::Solid => crate::escape::custom::solid_error(&program, source).map_or(Ok(()), Err),
+                    _ => Ok(()),
+                };
+                if let Err(e) = built {
+                    errors.push(Problem::rendered(&e, "build"));
+                }
+            }
+        }
+    } else {
+        // A track runs once, as the editor checks it; a script's
+        // parameters are collected, not run; a library declares none.
+        let ran = match kind {
+            Kind::Track => crate::animation::script::try_run(source).map(|d| {
+                title = Some(d.title);
+            }),
+            Kind::Generator | Kind::Modifier => crate::script::headless::param_defs(source).map(|_| ()),
+            _ => Ok(()),
+        };
+        if let Err(e) = ran {
+            errors.push(Problem::rendered(&e, "check"));
+        }
+    }
+    Checked { kind, title, errors, parameters: Vec::new() }
+}
+
 fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {
     match kind {
         Kind::Variation => {
@@ -688,5 +904,59 @@ fn value(t, p, ctx) { #{ rotation: t } }";
         assert_eq!(e.description, "Voronoi cells, picked in a noise-distorted square lattice.");
         assert_eq!(e.author, "slobo777, Andreas Maschke");
         assert!(crate::lang::rhai::transformation_any(src).is_ok(), "the block is a comment to Rhai");
+    }
+
+    /// The browser's `compile()`: a twin checks clean, with the parameters
+    /// a published script carries -- Phoenix's and Smooth's, which the
+    /// script module's `collect_params` refused (GPU dialects).
+    #[test]
+    fn a_twin_checks_clean_with_its_parameters() {
+        for (kind, source) in [(Kind::Formula, crate::escape::twins::source("phoenix").unwrap()), (Kind::Coloring, crate::escape::twins::coloring_source("smooth").unwrap())] {
+            let c = check(source, Some(kind));
+            assert!(c.errors.is_empty(), "{:?}", c.errors);
+            assert_eq!(c.kind, kind);
+            assert!(!c.parameters.is_empty(), "{kind:?} has parameters");
+            assert_eq!(c.parameters, api_parameters(kind, source).unwrap());
+            // Read from the source when no kind is asked for.
+            assert_eq!(check(source, None).kind, kind);
+        }
+        let field = crate::escape::twins::FIELD_COLORING_TWINS[0].1;
+        let c = check(field, None);
+        assert_eq!((c.kind, c.errors.len()), (Kind::FieldColoring, 0), "{:?}", c.errors);
+        let generator = crate::script::library::EMBEDDED[0].1;
+        let c = check(generator, Some(Kind::Generator));
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+    }
+
+    /// A mistake comes back where it is, at its stage; another kind than
+    /// the one asked for is refused before anything compiles; an unknown
+    /// kind is a report.
+    #[test]
+    fn a_mistake_comes_back_where_it_is() {
+        let broken = "fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\nfn step(s, p) {\n    s.z = s.z * s.z + nonsense;\n    s\n}\nfn escaped(s, p) { s.z.norm_sqr() > 4.0 }\n";
+        let c = check(broken, Some(Kind::Formula));
+        let first = c.errors.first().expect("an error");
+        assert_eq!((first.line, first.stage), (Some(3), "check"), "{first:?}");
+        assert!(c.parameters.is_empty());
+
+        let phoenix = crate::escape::twins::source("phoenix").unwrap();
+        let c = check(phoenix, Some(Kind::Coloring));
+        assert_eq!(c.errors[0].stage, "kind", "{:?}", c.errors);
+
+        let json: serde_json::Value = serde_json::from_str(&compile_json("palette", phoenix)).unwrap();
+        assert_eq!((json["ok"].as_bool(), json["errors"][0]["stage"].as_str()), (Some(false), Some("kind")));
+        let json: serde_json::Value = serde_json::from_str(&compile_json("", broken)).unwrap();
+        assert_eq!(json["kind"], "formula");
+        assert_eq!(json["errors"][0]["line"], 3);
+    }
+
+    /// A rendered compiler message keeps its position.
+    #[test]
+    fn a_rendered_message_keeps_its_position() {
+        let p = Problem::rendered("12:5: error: no such name", "build");
+        assert_eq!((p.line, p.column, p.message.as_str()), (Some(12), Some(5), "no such name"));
+        assert_eq!(p.render(), "12:5: error: no such name");
+        let plain = Problem::rendered("an effect has `fn effect(c, p)`", "build");
+        assert_eq!((plain.line, plain.render().as_str()), (None, "an effect has `fn effect(c, p)`"));
     }
 }

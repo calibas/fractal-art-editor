@@ -85,6 +85,7 @@ script.list_scripts()  // → JSON string
 
 script.script_source(id)          // → the script's source text, by id
 script.collect_params(source)     // → {name, kind, flags, params} for arbitrary source
+script.compile(kind, source)      // → check any Rhai source (see "Checking a Rhai source")
 
 script.run(source, seed, paramsJson)               // generator: starts from the default config
 script.run_on(source, seed, paramsJson, baseJson)  // modifier: applied to baseJson
@@ -213,9 +214,41 @@ const found = JSON.parse(await render.probe());   // rejects with a clear messag
   features: [...], missing: [...], degraded: [...] }`. `max_dimension` is
   the largest render a side on this device (the device's own
   `maxTextureDimension2D`, commonly 8192 or 16384).
+- `render.compile(kind, source)` checks a Rhai source without the GPU:
+  see "Checking a Rhai source" below.
 - `render.set_log_level(level)`: `"off"`, `"error"` (the default),
   `"warn"` (a Rhai source that did not compile, with every diagnostic),
   `"info"`, `"debug"` or `"trace"`, to the browser console.
+
+### Checking a Rhai source
+
+Both modules have `compile(kind, source)`: the check the desktop Formula
+Editor makes before Use, for any kind (`storage::library::check`) --
+the language, then what the kind builds (a colouring that colours
+nothing, a variation's, an effect's or a simulation's module, a solid's
+walk). It registers nothing and needs no GPU, so it can run as the user
+types.
+
+```js
+const r = JSON.parse(render.compile("formula", source));   // "" reads the kind from the source
+// { ok, kind: "formula", title,
+//   errors: [ { line, column, message, stage } ],   // line/column 1-based, null when unknown
+//   warnings: [],
+//   parameters: [ ... ] }                           // when ok: the API's Parameter shape
+```
+
+- `kind` is the API's name: `formula`, `coloring`, `field`,
+  `field_coloring`, `solid`, `sim_model`, `sim_coloring`, `variation`,
+  `effect`, `track`, `generator`, `modifier`, `library`.
+- `stage`: `"kind"` (the source is another kind than the one asked for,
+  or none at all), `"check"` (parsing, names, types), `"build"` (the
+  kind's own compile).
+- `parameters` are what a script published from this source carries
+  (ffapi stores them as sent), including a GPU kind's, which
+  `collect_params` refuses.
+- A shader the compiler produced that the GPU then refuses is not found
+  here (the web build has no WGSL validator): `render()` reports it, as
+  "the GPU refused the render".
 
 ### Render
 

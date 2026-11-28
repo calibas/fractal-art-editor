@@ -30,7 +30,7 @@ use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::escape::custom;
 use crate::lang::{self, EntryKind, Severity};
 use crate::storage::formula_store;
-use crate::storage::library::Store;
+use crate::storage::library::{Kind, Store};
 use crate::storage::manage;
 
 /// How long typing must pause before the file is checked again.
@@ -299,65 +299,26 @@ impl RhaiEditorPanel {
         }
         self.track = None;
         let kind = lang::rhai::kind_of(&text).unwrap_or(EntryKind::Formula);
-        let checked = match kind {
-            EntryKind::Formula => lang::rhai::program(&text),
-            EntryKind::Coloring => lang::rhai::coloring(&text),
-            EntryKind::Transform => lang::rhai::transformation_any(&text),
-            EntryKind::Solid => lang::rhai::solid(&text),
-            EntryKind::Effect => lang::rhai::effect(&text),
-            EntryKind::SimColoring => lang::rhai::sim_coloring(&text),
-            EntryKind::SimModel => lang::rhai::sim_model(&text, lang::rhai::SimFn::Step(0)),
-            EntryKind::Field => lang::rhai::field(&text),
-            EntryKind::FieldColoring => lang::rhai::field_coloring(&text),
+        // The check Use would make, everything short of rendering
+        // (`storage::library::check_only`, which the browser's `compile()`
+        // makes too): the language, a colouring that colours nothing, a
+        // variation's, an effect's or a simulation's module, a solid's
+        // walk.
+        let as_kind = match kind {
+            EntryKind::Formula => Kind::Formula,
+            EntryKind::Coloring => Kind::Coloring,
+            EntryKind::Transform => Kind::Variation,
+            EntryKind::Solid => Kind::Solid,
+            EntryKind::Effect => Kind::Effect,
+            EntryKind::SimColoring => Kind::SimColoring,
+            EntryKind::SimModel => Kind::SimModel,
+            EntryKind::Field => Kind::Field,
+            EntryKind::FieldColoring => Kind::FieldColoring,
         };
-        let mut errors: Vec<String> = match &checked {
-            Ok(_) => Vec::new(),
-            Err(d) => d.iter().map(|x| x.render(&text)).collect(),
-        };
-        // A colouring that sets no index draws nothing: not offered.
-        if kind == EntryKind::Coloring && checked.as_ref().is_ok_and(|p| !lang::wgsl::colours_anything(p)) {
-            errors.push(t!("formula_editor.colours_nothing").to_string());
-        }
-        // A transformation becomes a variation: its WGSL too, under the
-        // id Use gives it when it needs one.
-        if kind == EntryKind::Transform && checked.is_ok() {
-            let with_id = if crate::variations::custom::needs_id(&text) { lang::rhai::with_own_id(&text, &crate::scripted::mint_id()) } else { text.clone() };
-            if let Err(e) = crate::variations::custom::compile(&with_id) {
-                errors.push(e);
-            }
-        }
-        // An effect becomes one: its module too, under the id Use gives it
-        // when it has none of its own (none, or not a UUID: a copy of a
-        // built-in's, one typed by hand).
-        if kind == EntryKind::Effect && checked.is_ok() {
-            let with_id = lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
-            if let Err(e) = crate::effects::custom::compile(&with_id, crate::provenance::Provenance::Local) {
-                errors.push(e);
-            }
-        }
-        // A simulation colouring becomes one: its module too (P4).
-        if kind == EntryKind::SimColoring && checked.is_ok() {
-            if let Err(e) = crate::sim::custom::compile(&text, "custom-check") {
-                errors.push(e);
-            }
-        }
-        // A model: every pass and its seed (P4).
-        if kind == EntryKind::SimModel && checked.is_ok() {
-            if let Err(e) = crate::sim::custom::compile_model(&text, "custom-check") {
-                errors.push(e);
-            }
-        }
-        let title = match &checked {
-            Ok(p) => p.name.clone(),
-            Err(_) => lang::rhai::title(&text).unwrap_or_else(|| self.name.clone()),
-        };
+        let checked = crate::storage::library::check_only(&text, Some(as_kind));
+        let errors: Vec<String> = checked.errors.iter().map(|p| p.render()).collect();
+        let title = checked.title.clone().unwrap_or_else(|| self.name.clone());
         let is = |key: &str| vec![t!(key).to_string()];
-        // A solid's walk too (B3).
-        if kind == EntryKind::Solid {
-            if let Some(e) = checked.as_ref().ok().and_then(|p| custom::solid_error(p, &text)) {
-                errors.push(e);
-            }
-        }
         // Its own kind's row has the errors; every other row says what
         // the file is.
         let key = match kind {

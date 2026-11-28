@@ -56,6 +56,14 @@ pub fn collect_params_impl(source: &str) -> Result<String, String> {
     serde_json::to_string(&headless::params(source)?).map_err(|e| e.to_string())
 }
 
+/// Check a Rhai source as the Formula Editor does before Use -- any
+/// kind, the GPU ones too, which `collect_params` refuses
+/// (`fae::storage::library::compile_json`; the renderer module has the
+/// same call).
+pub fn compile_impl(kind: &str, source: &str) -> String {
+    fae::storage::library::compile_json(kind, source)
+}
+
 /// A stage's `params_json`: a JSON object, or empty for none.
 fn params_value(params_json: &str) -> Result<Value, String> {
     if params_json.trim().is_empty() {
@@ -162,6 +170,17 @@ mod wasm {
     #[wasm_bindgen]
     pub fn collect_params(source: &str) -> Result<String, JsValue> {
         crate::collect_params_impl(source).map_err(js)
+    }
+
+    /// Check a Rhai source of any kind as the desktop Formula Editor
+    /// does before Use: `kind` the API's name ("formula", "variation",
+    /// "generator" ...) or "" to read it from the source. JSON:
+    /// `{ ok, kind, title, errors: [{ line, column, message, stage }],
+    /// warnings, parameters }`, `parameters` in the API's shape. The
+    /// renderer module has the same call.
+    #[wasm_bindgen]
+    pub fn compile(kind: &str, source: &str) -> String {
+        crate::compile_impl(kind, source)
     }
 
     /// Run a generator. `seed` is a JS BigInt. Returns the envelope
