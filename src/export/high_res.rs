@@ -386,41 +386,19 @@ impl HighResExporter {
             .await
             .map_err(|e| format!("Failed to find GPU adapter: {}", e))?;
 
-        // Request the adapter's full storage-buffer binding size (the
-        // default `DeviceDescriptor` uses WebGPU's spec-minimum 128 MB
-        // limit, which forces tile fallback even on desktop GPUs that
-        // support gigabyte-sized bindings). Without this, 8K exports
-        // get classified as SerialTiles on every desktop and miss the
-        // GPU accumulate fast path. Mirrors `gpu/device.rs`'s
-        // initialization for the interactive renderer.
+        // The renderer's limits and features (`gpu::requirements`): the
+        // adapter's full storage-buffer binding size, or 8K exports are
+        // classified as SerialTiles and miss the GPU accumulate fast path;
+        // its texture size, for 16K+ exports; FLOAT32_FILTERABLE, or the
+        // density effects no-op on the tiled path.
         let adapter_limits = adapter.limits();
         log::info!(
             "Export adapter limits: max_storage_buffer_binding_size = {} MB, max_texture_dimension_2d = {}",
             adapter_limits.max_storage_buffer_binding_size / (1024 * 1024),
             adapter_limits.max_texture_dimension_2d,
         );
-        let mut limits = Limits::default();
-        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-        limits.max_buffer_size = adapter_limits.max_buffer_size;
-        // The accumulation/output textures in `tonemap_gpu` are sized
-        // to the requested width/height. Default `Limits` caps at the
-        // 8192 WebGPU floor; raise it so 16K+ exports don't fail
-        // texture creation on desktops that natively support 16384+.
-        limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-        // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
-        limits.max_storage_buffers_per_shader_stage =
-            adapter_limits.max_storage_buffers_per_shader_stage;
-
-        // Request FLOAT32_FILTERABLE when the adapter advertises it so the
-        // density-effect chain can bilinear-sample the Rgba32Float accumulation
-        // (run_density_effects skips density entirely without it). Mirrors the
-        // FlameRenderer device in gpu/device.rs and the headless device in
-        // app/export.rs — without it, density effects silently no-op on the
-        // tiled export path.
-        let mut required_features = Features::empty();
-        if adapter.features().contains(Features::FLOAT32_FILTERABLE) {
-            required_features |= Features::FLOAT32_FILTERABLE;
-        }
+        let limits = crate::gpu::requirements::limits(&adapter_limits);
+        let required_features = crate::gpu::requirements::features(adapter.features(), crate::gpu::requirements::WITHOUT_TIMESTAMPS);
 
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {

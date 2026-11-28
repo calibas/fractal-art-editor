@@ -34,16 +34,16 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 log = "0.4"
+# probe()'s report.
+serde_json = "1.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+# The console logger behind set_log_level.
+console_log = "1.0"
 
 [dev-dependencies]
 pollster = { version = "0.4", features = ["macro"] }
-# The smoke tests edit a shipped config (a simulation's step count) and
-# pick a preset out of the bundled file. Test-only: the module itself
-# takes config JSON as a string.
-serde_json = "1.0"
 
 # Tests are not a shipping artifact. `cargo test --release` would pick
 # up [profile.release] below — opt-level="z", fat LTO, one codegen unit

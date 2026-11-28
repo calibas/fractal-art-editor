@@ -298,7 +298,7 @@ pub fn field_preset_changes(field: &'static fields::FieldDef, preset: &EscapePre
         (ConfigPath::EscapeColoring, ConfigValue::String(coloring.name.to_string())),
         (ConfigPath::EscapeCenterRe, ConfigValue::String(preset.center_re.to_string())),
         (ConfigPath::EscapeCenterIm, ConfigValue::String(preset.center_im.to_string())),
-        (ConfigPath::EscapeZoomLog2, (preset.zoom_log2 as f32).into()),
+        (ConfigPath::EscapeZoomLog2, ConfigValue::Double(preset.zoom_log2)),
         (ConfigPath::EscapeMaxIter, ConfigValue::UInt(preset.max_iter)),
     ];
     let value = |given: &[(&str, f32)], p: &crate::params::ParamDef| given.iter().find(|(k, _)| *k == p.name).map(|(_, v)| *v).unwrap_or(p.slot_default());

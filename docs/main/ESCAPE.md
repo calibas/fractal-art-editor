@@ -91,7 +91,10 @@ so a file from a newer build still opens. Modes B and D resolve a
 colouring name their registry lacks to the def's `default_coloring` —
 which is also the state right after switching formula families, when
 `coloring` still names the previous family's entry.
-`render::unknown_names` lists the names no registry knows, for the CLI.
+`render::unknown_names` lists the names no registry knows, for the CLI
+and the gallery module, which refuse such a config; a carried source
+that did not compile is one, with its first error
+(`custom::failure`).
 
 Every escape shader binds group 0; mode D adds group 1 (the flame's
 maps), and a lens adds group 2. A shader without either is

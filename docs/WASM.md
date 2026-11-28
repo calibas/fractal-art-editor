@@ -205,7 +205,13 @@ black canvas rather than an error.
   `a_flame_renders_within_a_browsers_storage_limit`.
 - **Limits start from `downlevel_webgl2_defaults()`** on the web, with
   storage-binding size, buffer size, 2D texture size and storage-buffer
-  count raised to what the adapter reports (`src/gpu/device.rs`).
+  count raised to what the adapter reports. Every device the renderer
+  makes -- the app's, the exports', the gallery module's -- takes its
+  limits and features from one place, `src/gpu/requirements.rs`, which
+  the gallery module also publishes as `requirements()`. A ceiling is
+  read off the device (`device.limits()`), never off the request: a
+  browser grants at least its defaults, so the downlevel request's 2048
+  is not the device's.
 - **No blocking device poll.** WebGPU cannot wait for the GPU, so
   nothing on the web may: GPU readbacks complete on a later frame, long
   work is a future polled a slice per frame (the Focused Rendering

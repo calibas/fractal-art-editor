@@ -785,7 +785,7 @@ mod escape {
         // on the first wheel notch.
         let new_zoom_log2 = (esc.zoom_log2 + zoom_factor.log2()).clamp(-8.0, 100_000_000.0);
 
-        let mut updates = vec![(ConfigPath::EscapeZoomLog2, ConfigValue::Float(new_zoom_log2 as f32))];
+        let mut updates = vec![(ConfigPath::EscapeZoomLog2, ConfigValue::Double(new_zoom_log2))];
 
         // A solid anchors the zoom the same way, in the target's plane:
         // the point of that plane under the cursor stays under it. What
@@ -1150,6 +1150,19 @@ mod tests {
         let still = escape_point(&after, panel, cur);
         let tol = 1e-6 * (4.0 / c.escape.zoom_factor());
         assert!((before.0 - still.0).abs() < tol && (before.1 - still.1).abs() < tol, "{before:?} vs {still:?}");
+    }
+
+    /// A deep zoom keeps its digits: the zoom is an f64 in the config,
+    /// and a wheel notch at 2^1000000 moves it by the notch, not by
+    /// whatever an f32 near a million can hold (steps of 1/16).
+    #[test]
+    fn a_deep_escape_zoom_keeps_its_digits() {
+        let mut c = rotated_plane();
+        c.escape.zoom_log2 = 1_000_000.123_456_789;
+        let factor = wheel_factor(120.0);
+        let after = applied(&c, &escape_zoom(&c, factor, None, [800.0, 600.0]).expect("a zoom"));
+        let moved = after.escape.zoom_log2 - c.escape.zoom_log2;
+        assert!((moved - factor.log2()).abs() < 1e-9, "moved {moved}, a notch is {}", factor.log2());
     }
 
     /// The camera kinds' configs for the 3D tests: a flame and a solid with

@@ -88,23 +88,9 @@ pub async fn export_headless_wasm(
         adapter_info.backend
     );
 
-    // Use WebGL2-compatible limits with storage buffer override
-    let adapter_limits = adapter.limits();
-    let mut limits = egui_wgpu::wgpu::Limits::downlevel_webgl2_defaults();
-    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-    // Compute bind group needs 10 storage buffers per stage
-    // (subflame_transforms + subflame_metadata pushed the count to 10).
-    limits.max_storage_buffers_per_shader_stage =
-        adapter_limits.max_storage_buffers_per_shader_stage;
-
-    let mut required_features = egui_wgpu::wgpu::Features::CLEAR_TEXTURE;
-    if adapter.features().contains(egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE) {
-        required_features |= egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE;
-    }
-    // See gpu/device.rs: optional GPU-time pacing for escape chunks.
-    if adapter.features().contains(egui_wgpu::wgpu::Features::TIMESTAMP_QUERY) {
-        required_features |= egui_wgpu::wgpu::Features::TIMESTAMP_QUERY;
-    }
+    // The renderer's limits and features (`gpu::requirements`).
+    let limits = crate::gpu::requirements::limits(&adapter.limits());
+    let required_features = crate::gpu::requirements::features(adapter.features(), crate::gpu::requirements::APP_OPTIONAL);
 
     let (device, queue) = adapter
         .request_device(&egui_wgpu::wgpu::DeviceDescriptor {
@@ -326,34 +312,11 @@ pub(crate) async fn headless_device() -> Result<(egui_wgpu::wgpu::Device, egui_w
         .await
         .map_err(|e| format!("Failed to find adapter: {:?}", e))?;
 
-    // Request the adapter's actual storage-buffer + total-buffer
-    // + texture-dimension limits. The WebGPU spec defaults are
-    // 128 MB binding, 256 MB total, 8K texture dim — those force
-    // 4K+ histograms to fail allocation and 8K+ images to fail
-    // texture creation, even on desktops that natively support
-    // gigabyte buffers and 16K+ textures. Mirrors the limits
-    // expansion HighResExporter::new does for the same reason.
-    let adapter_limits = adapter.limits();
-    let mut limits = egui_wgpu::wgpu::Limits::default();
-    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-    limits.max_buffer_size = adapter_limits.max_buffer_size;
-    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-    // Compute bind group needs 10 storage buffers (see gpu/device.rs
-    // for the running count); WebGPU spec floor is 8.
-    limits.max_storage_buffers_per_shader_stage =
-        adapter_limits.max_storage_buffers_per_shader_stage;
-
-    // FLOAT32_FILTERABLE so the density-effect chain can bilinear-sample the
-    // Rgba32Float accumulation (see gpu/device.rs). Requested only when the
-    // adapter supports it.
-    let mut required_features = egui_wgpu::wgpu::Features::CLEAR_TEXTURE;
-    if adapter.features().contains(egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE) {
-        required_features |= egui_wgpu::wgpu::Features::FLOAT32_FILTERABLE;
-    }
-    // See gpu/device.rs: optional GPU-time pacing for escape chunks.
-    if adapter.features().contains(egui_wgpu::wgpu::Features::TIMESTAMP_QUERY) {
-        required_features |= egui_wgpu::wgpu::Features::TIMESTAMP_QUERY;
-    }
+    // The renderer's limits and features (`gpu::requirements`): the
+    // adapter's own buffer and texture sizes, which 4K+ histograms and 8K+
+    // pictures need past WebGPU's floors.
+    let limits = crate::gpu::requirements::limits(&adapter.limits());
+    let required_features = crate::gpu::requirements::features(adapter.features(), crate::gpu::requirements::APP_OPTIONAL);
 
     let (device, queue) = adapter
         .request_device(&egui_wgpu::wgpu::DeviceDescriptor {

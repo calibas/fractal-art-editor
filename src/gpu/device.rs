@@ -235,68 +235,23 @@ impl GpuContext {
             adapter_limits.max_storage_buffer_binding_size / (1024 * 1024)
         );
 
-        // Use WebGL2-compatible limits for WASM, full limits for desktop
-        #[cfg(target_arch = "wasm32")]
-        let mut limits = Limits::downlevel_webgl2_defaults();
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut limits = Limits::default();
-
-        // Request adapter's max storage buffer size (for 4K+ resolutions)
-        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-        // Also expand max_buffer_size and max_texture_dimension_2d:
-        // the WebGPU spec floors (256 MB buffer, 8K texture) are
-        // smaller than typical desktop adapters' actual capabilities,
-        // and leaving them at default crashes "Save as PNG" at
-        // resolutions like 8K² where the histogram (1 GB) fits one
-        // storage-buffer binding but not the smaller buffer floor.
-        // CLI export path already expands these — mirror it here so
-        // the in-app export hits the same effective limits.
-        limits.max_buffer_size = adapter_limits.max_buffer_size;
-        limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-        // A flame shader's layout holds only the storage buffers its WGSL
-        // uses (`gpu::pipelines::used_bindings`): 4 for a plain flame, 8
-        // with every optional one on -- within WebGPU's floor of 8. Ask
-        // for the adapter's own limit anyway, same pattern as the
-        // binding-size / buffer-size expansions above: the headroom
-        // costs nothing, and a browser reports as few as 10.
-        limits.max_storage_buffers_per_shader_stage =
-            adapter_limits.max_storage_buffers_per_shader_stage;
+        // The limits and features every device the renderer makes asks
+        // for (`gpu::requirements`): the adapter's own sizes for large
+        // renders, FLOAT32_FILTERABLE for density effects, timestamps for
+        // the escape renderer's pacing, each where the adapter has it.
+        let limits = crate::gpu::requirements::limits(&adapter_limits);
 
         log::info!(
-            "Requesting device with limits: \
-             max_storage_buffer_binding_size = {} MB, \
-             max_buffer_size = {} MB, \
-             max_texture_dimension_2d = {}, \
-             max_storage_buffers_per_shader_stage = {}",
+            "Requesting device with limits:              max_storage_buffer_binding_size = {} MB,              max_buffer_size = {} MB,              max_texture_dimension_2d = {},              max_storage_buffers_per_shader_stage = {}",
             limits.max_storage_buffer_binding_size / (1024 * 1024),
             limits.max_buffer_size / (1024 * 1024),
             limits.max_texture_dimension_2d,
             limits.max_storage_buffers_per_shader_stage,
         );
 
-        // Check adapter features for timestamp query support
         let adapter_features = adapter.features();
         log::info!("Adapter features: {:?}", adapter_features);
-
-        // FLOAT32_FILTERABLE lets shaders filter (bilinear-sample) Rgba32Float
-        // textures. The density-effect chain bilinear-samples the Rgba32Float
-        // accumulation; without this feature that bind group is invalid and the
-        // effect errors. Requested only when the adapter advertises it (almost
-        // all desktop GPUs do); EffectChainRunner skips density effects when
-        // it's absent rather than crash.
-        let mut required_features = Features::CLEAR_TEXTURE;
-        if adapter_features.contains(Features::FLOAT32_FILTERABLE) {
-            required_features |= Features::FLOAT32_FILTERABLE;
-        }
-        // TIMESTAMP_QUERY lets the escape renderer pace its chunks on
-        // MEASURED GPU time instead of inferring cost from the gap
-        // between calls -- an inference that lies whenever submissions
-        // are still in flight. Optional everywhere: absent (SwiftShader,
-        // some mobile, most browsers today) the renderer keeps the
-        // wall-clock path.
-        if adapter_features.contains(Features::TIMESTAMP_QUERY) {
-            required_features |= Features::TIMESTAMP_QUERY;
-        }
+        let required_features = crate::gpu::requirements::features(adapter_features, crate::gpu::requirements::APP_OPTIONAL);
 
         let (device, queue) = adapter.request_device(
             &DeviceDescriptor {

@@ -94,6 +94,16 @@ fn registry() -> &'static RwLock<Registry> {
     R.get_or_init(|| RwLock::new(Registry::default()))
 }
 
+/// Why a source the config carries under `name` did not compile: its
+/// first error, `line:col: error: message` for a formula or colouring the
+/// config carries (`ensure`). `None` for a name that compiled or was never
+/// tried. What [`crate::renderer::render::unknown_names`] says beside the
+/// name, so a refused render names the mistake rather than only the entry.
+pub fn failure(name: &str) -> Option<String> {
+    let r = registry().read().ok()?;
+    r.failed.contains(name).then(|| r.failed_why.get(name).cloned().unwrap_or_default())
+}
+
 pub fn formula(name: &str) -> Option<&'static FormulaDef> {
     if !name.starts_with(PREFIX) {
         return None;
@@ -1817,8 +1827,10 @@ pub fn ensure(escape: &EscapeConfig) {
         if let Err(diags) = result {
             let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
             log::warn!("Custom escape entry `{}` ({name}) did not compile: {}", src.entry, msgs.join("; "));
+            let first = diags.iter().find(|d| d.severity == lang::Severity::Error).map_or_else(String::new, |d| d.render(&src.source));
             if let Ok(mut r) = registry().write() {
                 r.failed.insert(name.to_string());
+                r.failed_why.insert(name.to_string(), first);
             }
         }
     }

@@ -148,7 +148,7 @@ pub fn camera_2d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                     .on_hover_text(t!("escape_panel.tooltip_zoom_log10"));
                 if resp.changed() {
                     let z2 = crate::config::escape::EscapeConfig::log10_to_log2(z10);
-                    let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (z2 as f32).into());
+                    let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, ConfigValue::Double(z2));
                 }
                 ui.label(egui::RichText::new(super::escape_panel::magnification_label(config.escape.zoom_log10())).weak());
             }
@@ -473,7 +473,7 @@ fn escape_zoom_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, esc: &
             .changed()
         {
             let z2 = crate::config::escape::EscapeConfig::log10_to_log2(z10);
-            let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, (z2 as f32).into());
+            let _ = config_manager.update_param(ConfigPath::EscapeZoomLog2, ConfigValue::Double(z2));
         }
         ui.label(egui::RichText::new(super::escape_panel::magnification_label(esc.zoom_log10())).weak());
     });

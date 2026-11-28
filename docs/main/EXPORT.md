@@ -146,9 +146,12 @@ The escape and simulation paths run the same tail on their own
 
 `unknown_names(config)` lists names the config uses that this build has
 no registry entry for (an escape formula, colouring or lens; a
-simulation model or colouring). The engines fall back to a default for
-these; the CLI refuses to export such a config instead, so an unknown
-formula does not come out as a Mandelbrot with exit code 0.
+simulation model or colouring), including a carried source that did not
+compile, with its first error (`line:col: error: message`). The engines
+fall back to a default for these; the CLI refuses to export such a
+config instead, so an unknown formula does not come out as a Mandelbrot
+with exit code 0, and so does the gallery module's `render()`
+([wasm/README.md](../../wasm/README.md)).
 
 ---
 

@@ -192,8 +192,30 @@ inverts once the value wraps. Count positions instead.
 ```js
 import init, * as render from "./pkg/fae_render.js";
 await init();
-await render.probe();   // rejects with a clear message if WebGPU is unavailable
+const found = JSON.parse(await render.probe());   // rejects with a clear message if WebGPU is unavailable
 ```
+
+### Before rendering: requirements, probe, logging
+
+- `render.requirements()` returns, as JSON and **without touching the
+  GPU**, what the renderer asks of a device, in WebGPU's names:
+  `{ api: "webgpu", features: { required: [], optional: [{ name, without }] },
+  limits: { maxStorageBuffersPerShaderStage, maxStorageBufferBindingSize,
+  maxBufferSize, maxTextureDimension2D } }`. The limits are WebGPU's own
+  floors, so any WebGPU adapter qualifies; `without` says what renders
+  differently on a device lacking an optional feature (no
+  `float32-filterable`: density effects are skipped). The same facts
+  every device the renderer makes is built from
+  (`fae::gpu::requirements`), so a page's own check cannot drift from
+  the module.
+- `render.probe()` resolves to what it found:
+  `{ ok, adapter: { name, backend, device_type, driver }, max_dimension,
+  features: [...], missing: [...], degraded: [...] }`. `max_dimension` is
+  the largest render a side on this device (the device's own
+  `maxTextureDimension2D`, commonly 8192 or 16384).
+- `render.set_log_level(level)`: `"off"`, `"error"` (the default),
+  `"warn"` (a Rhai source that did not compile, with every diagnostic),
+  `"info"`, `"debug"` or `"trace"`, to the browser console.
 
 ### Render
 
@@ -225,14 +247,24 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
 - **Inputs are treated as hostile**, because a config and a URL are both
   shareable artifacts:
   - dimensions are checked against the device's
-    `max_texture_dimension_2d` (commonly 8192) and rejected with an
-    error — they are not passed through to fail deeper;
+    `max_texture_dimension_2d` (`probe()`'s `max_dimension`) and rejected
+    with an error — they are not passed through to fail deeper. (Until
+    2026-11-28 the module read this off the downlevel limits it
+    requested and refused anything past 2048.)
   - the iteration budget is clamped to 8e9, from *both* the argument and
     the config's own `max_iterations` (an unclamped 5e11 ran for 90+
     seconds — a frozen tab);
-  - wgpu validation errors are captured rather than left to panic. This
-    matters in wasm: a panic poisons the module, so one bad request
-    would otherwise kill the renderer until the page reloads.
+  - wgpu validation and out-of-memory errors during a render are caught
+    by error scopes and **fail the render** with the GPU's message,
+    rather than panicking (a panic poisons the module until the page
+    reloads) or coming back as a blank image;
+  - **a config this build cannot draw is refused**, with the reason,
+    rather than drawn with a default in its place: an escape formula or
+    colouring, simulation model or colouring this build has no entry
+    for, or a carried Rhai source that does not compile -- the error
+    names it and gives the source's first error as `line:col: error:
+    message`. (It used to render the engine's default: a Mandelbrot for
+    a broken formula.)
   Renders still fail by returning `Err`; the module should never abort.
 - **Serialize renders** (one at a time). The gallery uses a one-deep
   promise queue; concurrent calls would contend for the GPU and win

@@ -38,6 +38,18 @@
 //! Renders are serial. A second call while one is in flight gets an
 //! error rather than sharing the renderer — see `render_impl`. `release()`
 //! frees everything for a page that is done.
+//!
+//! **A render that cannot draw its config fails** rather than drawing
+//! something else: a name this build has no engine entry for, or a
+//! carried Rhai source that does not compile, is an error naming it (and
+//! the source's first error), where it used to render the engine's
+//! default (`unknown_names`) -- a Mandelbrot for a broken formula. A GPU
+//! validation or out-of-memory error during the render is an error too,
+//! caught by error scopes, where it used to come back as a blank image.
+//!
+//! The device asks for what every device the renderer makes asks for
+//! (`fae::gpu::requirements`); `requirements()` publishes it for a page
+//! deciding, before the download, whether to offer a live render.
 
 use fae::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD;
 use fae::config::FractalConfig;
@@ -95,9 +107,8 @@ pub struct RenderedTile {
     pub ms: f64,
 }
 
-/// Returns the device, its queue, and the adapter's maximum 2D texture
-/// dimension — the ceiling a render must respect.
-async fn create_device() -> Result<(wgpu::Device, wgpu::Queue, u32), String> {
+/// The high-performance adapter, or an error saying WebGPU is missing.
+async fn adapter() -> Result<wgpu::Adapter, String> {
     let backends = if cfg!(target_arch = "wasm32") {
         wgpu::Backends::BROWSER_WEBGPU
     } else {
@@ -109,37 +120,28 @@ async fn create_device() -> Result<(wgpu::Device, wgpu::Queue, u32), String> {
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
-    let adapter = instance
+    instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
         })
         .await
-        .map_err(|e| format!("no GPU adapter (WebGPU unavailable?): {e:?}"))?;
+        .map_err(|e| format!("no GPU adapter (WebGPU unavailable?): {e:?}"))
+}
 
-    // Same limits the app's WASM export requests: downlevel defaults,
-    // with the adapter's real storage-buffer capacity (the compute bind
-    // group uses 10 storage buffers per stage). Browsers fill the
-    // compute limits downlevel_webgl2_defaults zeroes out; native wgpu
-    // enforces the zeros literally, so the (test-only) native build
-    // starts from the real defaults instead.
-    let adapter_limits = adapter.limits();
-    let mut limits = if cfg!(target_arch = "wasm32") {
-        wgpu::Limits::downlevel_webgl2_defaults()
-    } else {
-        wgpu::Limits::default()
-    };
-    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-    limits.max_storage_buffers_per_shader_stage =
-        adapter_limits.max_storage_buffers_per_shader_stage;
+/// The device on `adapter`, its queue, and its maximum 2D texture
+/// dimension — the ceiling a render must respect.
+async fn create_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue, u32), String> {
+    // What every device the renderer makes asks for
+    // (`fae::gpu::requirements`): the adapter's own buffer and texture
+    // sizes, FLOAT32_FILTERABLE where it has it. This module once asked
+    // for the downlevel set's 2048 px textures and read its ceiling off
+    // the request, refusing a 4096 px render on a GPU with 16384.
+    let limits = fae::gpu::requirements::limits(&adapter.limits());
+    let required_features =
+        fae::gpu::requirements::features(adapter.features(), fae::gpu::requirements::WITHOUT_TIMESTAMPS);
 
-    let mut required_features = wgpu::Features::CLEAR_TEXTURE;
-    if adapter.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
-        required_features |= wgpu::Features::FLOAT32_FILTERABLE;
-    }
-
-    let max_dim = limits.max_texture_dimension_2d;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Gallery Renderer Device"),
@@ -151,6 +153,8 @@ async fn create_device() -> Result<(wgpu::Device, wgpu::Queue, u32), String> {
         })
         .await
         .map_err(|e| format!("device request failed: {e:?}"))?;
+    // The ceiling is what the device was given, never less than asked.
+    let max_dim = device.limits().max_texture_dimension_2d;
 
     // wgpu's default handler PANICS on a validation error. In wasm a
     // panic poisons the module: every later call fails and the page has
@@ -166,11 +170,43 @@ async fn create_device() -> Result<(wgpu::Device, wgpu::Queue, u32), String> {
 }
 
 /// Probe for a usable adapter without rendering — lets a page fail
-/// early with a clear message instead of on the first tile.
-pub async fn probe_impl() -> Result<(), String> {
-    let (device, _queue, _max_dim) = create_device().await?;
+/// early with a clear message instead of on the first tile. An error
+/// where there is no adapter or no device; otherwise what was found, as
+/// JSON: `{ ok, adapter: { name, backend, device_type, driver },
+/// max_dimension, features: [...], missing: [...], degraded: [...] }`
+/// -- `features` the optional ones the device got (WebGPU names),
+/// `missing` what the renderer needs and the adapter lacks (then `ok` is
+/// false), `degraded` what renders differently without an optional one.
+pub async fn probe_impl() -> Result<String, String> {
+    use fae::gpu::requirements as req;
+    let adapter = adapter().await?;
+    let info = adapter.get_info();
+    let missing = req::missing(&adapter.limits());
+    let (device, _queue, max_dim) = create_device(&adapter).await?;
+    let features = device.features();
     device.destroy();
-    Ok(())
+    let present: Vec<&str> = req::WITHOUT_TIMESTAMPS.iter().filter(|o| features.contains(o.feature)).map(|o| o.web_name).collect();
+    let report = serde_json::json!({
+        "ok": missing.is_empty(),
+        "adapter": {
+            "name": info.name,
+            "backend": format!("{:?}", info.backend),
+            "device_type": format!("{:?}", info.device_type),
+            "driver": info.driver,
+        },
+        "max_dimension": max_dim,
+        "features": present,
+        "missing": missing,
+        "degraded": req::degraded(features, req::WITHOUT_TIMESTAMPS),
+    });
+    Ok(report.to_string())
+}
+
+/// What the renderer asks of a GPU, as JSON in WebGPU's names, needing
+/// no GPU: for a page's own check before it downloads this module
+/// (`fae::gpu::requirements::requirements_json`).
+pub fn requirements_impl() -> String {
+    fae::gpu::requirements::requirements_json(fae::gpu::requirements::WITHOUT_TIMESTAMPS).to_string()
 }
 
 /// Upper bound on a single render's chaos-game budget.
@@ -204,6 +240,15 @@ pub async fn render_impl(
     let mut config = FractalConfig::from_json(config_json)
         .map_err(|e| format!("config did not parse: {e}"))?;
 
+    // A name the engines would replace with their default -- one this
+    // build lacks, or a carried source that does not compile -- is not
+    // this config's picture: refused, as the CLI refuses it, with the
+    // source's first error. Needs no GPU, so it comes first.
+    let unknown = fae::renderer::render::unknown_names(&config);
+    if !unknown.is_empty() {
+        return Err(format!("this config cannot be drawn: no {}", unknown.join(", no ")));
+    }
+
     // Create the device once and keep it. Creating one per tile is what
     // exhausted the GPU: wgpu's WebGPU backend implements `Drop` for
     // buffers and textures as a NO-OP, so a finished renderer's memory
@@ -217,7 +262,7 @@ pub async fn render_impl(
     // the shader cache warm: consecutive seeds of one generator usually
     // share a variation set, so the per-tile compile amortizes.
     if LIVE.with(|l| l.0.borrow().is_none()) {
-        let (device, queue, max_dim) = create_device().await?;
+        let (device, queue, max_dim) = create_device(&adapter().await?).await?;
         LIVE.with(|l| {
             *l.0.borrow_mut() = Some(Live { device, queue, max_dim, renderer: None });
         });
@@ -245,10 +290,24 @@ pub async fn render_impl(
         .unwrap_or(DEFAULT_EXPORT_ITERATIONS_PER_THREAD)
         .clamp(MIN_ITERATIONS_PER_THREAD, MAX_ITERATIONS_PER_THREAD);
 
+    // A validation or out-of-memory error anywhere in the render -- a
+    // shader that does not compile, a buffer past a limit -- is this
+    // render's error, not a log line beside a blank image. Popped in the
+    // reverse order of pushing.
+    let oom = live.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let validation = live.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let outcome = render_with_live(&mut live, &config, width, height, iters, ipt).await;
+    let gpu_error = match validation.pop().await {
+        Some(e) => Some(e),
+        None => oom.pop().await,
+    };
 
     LIVE.with(|l| *l.0.borrow_mut() = Some(live));
-    outcome
+    match (gpu_error, outcome) {
+        (Some(e), Err(render)) => Err(format!("the GPU refused the render: {e} ({render})")),
+        (Some(e), Ok(_)) => Err(format!("the GPU refused the render: {e}")),
+        (None, outcome) => outcome,
+    }
 }
 
 async fn render_with_live(
@@ -337,6 +396,39 @@ mod wasm {
     #[wasm_bindgen(start)]
     pub fn start() {
         console_error_panic_hook::set_once();
+        // Errors to the console from the start (a GPU error outside a
+        // render's scopes, a source that did not compile); more with
+        // `set_log_level`.
+        if console_log::init_with_level(log::Level::Trace).is_ok() {
+            log::set_max_level(log::LevelFilter::Error);
+        }
+    }
+
+    /// How much the module logs to the console: "off", "error" (the
+    /// default), "warn" (a source that did not compile, with every
+    /// diagnostic), "info", "debug" or "trace".
+    #[wasm_bindgen]
+    pub fn set_log_level(level: &str) -> Result<(), JsValue> {
+        let filter = match level.to_ascii_lowercase().as_str() {
+            "off" => log::LevelFilter::Off,
+            "error" => log::LevelFilter::Error,
+            "warn" => log::LevelFilter::Warn,
+            "info" => log::LevelFilter::Info,
+            "debug" => log::LevelFilter::Debug,
+            "trace" => log::LevelFilter::Trace,
+            other => return Err(JsValue::from_str(&format!("unknown log level `{other}`: off, error, warn, info, debug or trace"))),
+        };
+        log::set_max_level(filter);
+        Ok(())
+    }
+
+    /// What the renderer asks of a GPU, as JSON in WebGPU's names
+    /// (`{ api, features: { required, optional: [{ name, without }] },
+    /// limits: {...} }`). Needs no GPU: a page's check before it offers a
+    /// live render.
+    #[wasm_bindgen]
+    pub fn requirements() -> String {
+        crate::requirements_impl()
     }
 
     /// A finished tile. `pixels` is RGBA8, `width * height * 4` bytes —
@@ -370,9 +462,11 @@ mod wasm {
         }
     }
 
-    /// Fail early if WebGPU is unavailable, with a clear message.
+    /// Fail early if WebGPU is unavailable, with a clear message; where
+    /// it is, what was found, as JSON (`{ ok, adapter, max_dimension,
+    /// features, missing, degraded }`; see `probe_impl`).
     #[wasm_bindgen]
-    pub async fn probe() -> Result<(), JsValue> {
+    pub async fn probe() -> Result<String, JsValue> {
         crate::probe_impl().await.map_err(|e| JsValue::from_str(&e))
     }
 

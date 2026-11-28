@@ -3,4 +3,6 @@
 pub mod device;
 pub mod buffers;
 pub mod pipelines;
+/// What the renderer asks of a GPU: every device's limits and features.
+pub mod requirements;
 pub mod timer;

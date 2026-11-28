@@ -1887,7 +1887,7 @@ impl ConfigManager {
             ConfigPath::EscapeCamFov => Ok(config.escape.cam_fov.into()),
             // f32 view of an f64 field — see the ConfigPath doc for why
             // the precision ceiling is acceptable until phase 4.
-            ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
+            ConfigPath::EscapeZoomLog2 => Ok(ConfigValue::Double(config.escape.zoom_log2)),
             ConfigPath::EscapeZoomLog10 => Ok((config.escape.zoom_log10() as f32).into()),
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),

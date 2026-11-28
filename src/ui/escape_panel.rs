@@ -2280,7 +2280,7 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager, sol
                             ConfigPath::EscapeCenterIm,
                             ConfigValue::String(format!("{centre:?}", centre = crate::escape::ifs::plane_im(centre[1]))),
                         ),
-                        (ConfigPath::EscapeZoomLog2, ((4.0f64 / span).log2() as f32).into()),
+                        (ConfigPath::EscapeZoomLog2, ConfigValue::Double((4.0f64 / span).log2())),
                     ]
                 };
                 let _ = config_manager
@@ -2693,7 +2693,7 @@ pub fn apply_preset(
         (ConfigPath::EscapeColoring, ConfigValue::String(preset.coloring.to_string())),
         (ConfigPath::EscapeCenterRe, ConfigValue::String(preset.center_re.to_string())),
         (ConfigPath::EscapeCenterIm, ConfigValue::String(preset.center_im.to_string())),
-        (ConfigPath::EscapeZoomLog2, (preset.zoom_log2 as f32).into()),
+        (ConfigPath::EscapeZoomLog2, ConfigValue::Double(preset.zoom_log2)),
         (ConfigPath::EscapeMaxIter, ConfigValue::UInt(preset.max_iter)),
         (ConfigPath::EscapeJulia, preset.julia.is_some().into()),
     ];

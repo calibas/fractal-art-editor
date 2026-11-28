@@ -3432,7 +3432,8 @@ mod tests {
 
         assert_eq!(
             mgr.get_value(&ConfigPath::EscapeZoomLog2).unwrap(),
-            ConfigValue::Float(3.0)
+            // An f64, as the config holds it: undo keeps a deep zoom's digits.
+            ConfigValue::Double(3.0)
         );
         assert_eq!(
             mgr.get_value(&ConfigPath::EscapeFormulaParam { param: "power".into() }).unwrap(),

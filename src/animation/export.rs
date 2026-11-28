@@ -1153,42 +1153,12 @@ pub async fn export_animation(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
 
-    // The adapter's real limits, not wgpu's defaults. `Limits::default()`
-    // caps max_buffer_size at 256 MiB and textures at 8192 a side, and
-    // only the storage-BINDING size used to be raised here. A 4K
-    // deep-zoom frame carries 3840*2160*48 = 398 MB of per-pixel
-    // iteration state, so the exporter asked wgpu for a buffer past the
-    // limit it had itself requested -- and wgpu answers a validation
-    // error by panicking, on this worker thread, which left the export
-    // dialog waiting forever. The number in that panic was this
-    // default, not the GPU.
-    let adapter_limits = adapter.limits();
-    let mut limits = wgpu::Limits::default();
-    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-    limits.max_buffer_size = adapter_limits.max_buffer_size;
-    limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-    // Compute bind group has 10 storage buffers post-subflames; spec floor is 8.
-    limits.max_storage_buffers_per_shader_stage =
-        adapter_limits.max_storage_buffers_per_shader_stage;
-
-    // The features every other export path asks for, which this one
-    // did not. Density effects bilinear-sample the Rgba32Float
-    // accumulation, so without FLOAT32_FILTERABLE the effect chain
-    // SKIPS them -- silently, by design, since on an adapter that
-    // genuinely lacks it the bind group would be invalid. This device
-    // requested only CLEAR_TEXTURE, so a video export dropped every
-    // density effect on a GPU that supports them perfectly well. It
-    // was a second, independent cause of the same symptom as the
-    // missing call in the old fast loop: the CLI loop DID call the
-    // density stage, and the stage declined every time.
-    let mut required_features = wgpu::Features::CLEAR_TEXTURE;
-    if adapter.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
-        required_features |= wgpu::Features::FLOAT32_FILTERABLE;
-    }
-    // Optional GPU-time pacing for escape chunks (see gpu/device.rs).
-    if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-        required_features |= wgpu::Features::TIMESTAMP_QUERY;
-    }
+    // The renderer's limits and features (`gpu::requirements`). Its own
+    // copy once drifted twice: a 4K deep-zoom frame's per-pixel state
+    // (398 MB) past the default buffer limit panicked the export, and a
+    // device without FLOAT32_FILTERABLE dropped every density effect.
+    let limits = crate::gpu::requirements::limits(&adapter.limits());
+    let required_features = crate::gpu::requirements::features(adapter.features(), crate::gpu::requirements::APP_OPTIONAL);
 
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {

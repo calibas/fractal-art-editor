@@ -301,3 +301,55 @@ async fn the_grid_actually_steps() {
         "20 steps and 2000 steps gave the same image — the grid is not stepping"
     );
 }
+
+/// The ceiling is the device's, not the downlevel request's 2048: a
+/// render past 2048 a side goes through. (The module asked for the
+/// downlevel limits and read its ceiling off the request.)
+#[pollster::test]
+async fn a_render_past_2048_is_accepted() {
+    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fae");
+    match fae_render::render_impl(config, 2100, 8, Some(10_000), None).await {
+        Ok(t) => assert_eq!((t.width, t.height), (2100, 8)),
+        Err(e) if e.contains("no GPU adapter") => eprintln!("skipped: {e}"),
+        Err(e) => panic!("a 2100 px render was refused: {e}"),
+    }
+}
+
+/// `probe()` reports what it found; `requirements()` needs no GPU.
+#[pollster::test]
+async fn probe_and_requirements_report_as_json() {
+    let req: serde_json::Value = serde_json::from_str(&fae_render::requirements_impl()).expect("requirements JSON");
+    assert_eq!(req["api"], "webgpu");
+    assert_eq!(req["features"]["optional"][0]["name"], "float32-filterable");
+    let report = match fae_render::probe_impl().await {
+        Ok(r) => r,
+        Err(e) if e.contains("no GPU adapter") => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+        Err(e) => panic!("probe failed: {e}"),
+    };
+    let report: serde_json::Value = serde_json::from_str(&report).expect("probe JSON");
+    assert_eq!(report["ok"], true, "{report}");
+    assert!(report["max_dimension"].as_u64().unwrap() >= 8192, "{report}");
+}
+
+/// A name the engines would replace with their default is an error, not
+/// the default's picture: an unknown formula, and a carried Rhai formula
+/// that does not compile, with its first error and where it is.
+#[pollster::test]
+async fn a_config_naming_what_cannot_be_drawn_is_refused() {
+    let base: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/visual/configs/escape/mandelbrot-smooth.fae")).unwrap();
+    let mut unknown = base.clone();
+    unknown["escape"]["formula"] = "no_such_formula".into();
+    let err = fae_render::render_impl(&unknown.to_string(), 32, 32, None, None).await.err().expect("refused");
+    assert!(err.contains("cannot be drawn") && err.contains("no_such_formula"), "{err}");
+
+    let source = "fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\nfn step(s, p) {\n    s.z = s.z * s.z + nonsense;\n    s\n}\nfn escaped(s, p) { s.z.norm_sqr() > 4.0 }\n";
+    let mut broken = base;
+    broken["escape"]["formula"] = "custom-broken-for-the-smoke-test".into();
+    broken["escape"]["custom_formula"] = serde_json::json!({ "dialect": "rhai", "entry": "", "source": source });
+    let err = fae_render::render_impl(&broken.to_string(), 32, 32, None, None).await.err().expect("refused");
+    assert!(err.contains("did not compile") && err.contains("3:"), "{err}");
+}

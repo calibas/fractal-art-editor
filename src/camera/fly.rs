@@ -512,7 +512,7 @@ fn solid_flight(config: &FractalConfig, v: [f64; 3], forward: [f64; 3], c: Clear
     let moved: [f64; 3] = std::array::from_fn(|k| (w[k] + forward[k] * shift) / d_target);
     let mut out = if moved.iter().any(|x| *x != 0.0) { pivot_moved(config, ViewKind::Solid, moved, panel, None) } else { Vec::new() };
     if let Some(z) = zoom.filter(|z| z.is_finite() && *z != esc.zoom_log2) {
-        out.push((ConfigPath::EscapeZoomLog2, (z as f32).into()));
+        out.push((ConfigPath::EscapeZoomLog2, ConfigValue::Double(z)));
     }
     out
 }

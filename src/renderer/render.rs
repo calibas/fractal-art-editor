@@ -229,6 +229,11 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
     // that does not is not.
     config.ensure_sources();
     let mut out = Vec::new();
+    // A carried source that did not compile says why.
+    let why = |what: String, failure: Option<String>| match failure.filter(|f| !f.is_empty()) {
+        Some(f) => format!("{what} (its source did not compile: {f})"),
+        None => what,
+    };
     match config.render_mode {
         crate::scene::transforms::RenderMode::Escape => {
             let e = &config.escape;
@@ -236,7 +241,7 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
             let b = crate::escape::fields::get_field(&e.formula).is_some();
             let d = crate::escape::ifs::get_ifs(&e.formula).is_some();
             if !(a || b || d) {
-                out.push(format!("escape formula `{}`", e.formula));
+                out.push(why(format!("escape formula `{}`", e.formula), crate::escape::custom::failure(&e.formula)));
             }
             // A colouring from another formula family is the state right
             // after a switch, and its default draws; one in no registry
@@ -248,7 +253,7 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
                     || crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == name)
             };
             if !colouring(&e.coloring) {
-                out.push(format!("escape colouring `{}`", e.coloring));
+                out.push(why(format!("escape colouring `{}`", e.coloring), crate::escape::custom::failure(&e.coloring)));
             }
             if !e.layer.coloring.is_empty() && !colouring(&e.layer.coloring) {
                 out.push(format!("escape colouring layer `{}`", e.layer.coloring));
@@ -269,17 +274,17 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
             for l in 0..s.layer_count() {
                 let name = s.layer_model_name(l);
                 if !model(name) {
-                    out.push(format!("simulation model `{name}`"));
+                    out.push(why(format!("simulation model `{name}`"), crate::sim::custom::failure(name)));
                 }
             }
             if s.color_layers.is_empty() {
                 if !colouring(&s.coloring) {
-                    out.push(format!("simulation colouring `{}`", s.coloring));
+                    out.push(why(format!("simulation colouring `{}`", s.coloring), crate::sim::custom::failure(&s.coloring)));
                 }
             } else {
                 for l in &s.color_layers {
                     if !colouring(&l.coloring) {
-                        out.push(format!("simulation colouring `{}`", l.coloring));
+                        out.push(why(format!("simulation colouring `{}`", l.coloring), crate::sim::custom::failure(&l.coloring)));
                     }
                 }
             }
@@ -1731,6 +1736,26 @@ mod unknown_names_tests {
         config.escape.custom_coloring = None;
         config.escape.coloring = "custom-from-nowhere".into();
         assert_eq!(unknown_names(&config).len(), 1);
+    }
+
+    /// A carried source that does not compile is unknown, and says why:
+    /// its first error, with the line and column. The browser's renderer
+    /// refuses with this rather than drawing the default formula.
+    #[test]
+    fn a_source_that_does_not_compile_says_why() {
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        let src = crate::config::escape::CustomSource {
+            dialect: crate::config::escape::CustomDialect::Rhai,
+            entry: String::new(),
+            source: "fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\nfn step(s, p) {\n    s.z = s.z * s.z + nonsense;\n    s\n}\nfn escaped(s, p) { s.z.norm_sqr() > 4.0 }\n".to_string(),
+            variations: Vec::new(),
+        };
+        config.escape.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
+        config.escape.custom_formula = Some(src);
+        let unknown = unknown_names(&config);
+        assert_eq!(unknown.len(), 1, "{unknown:?}");
+        assert!(unknown[0].contains("did not compile") && unknown[0].contains("3:"), "{}", unknown[0]);
     }
 }
 
