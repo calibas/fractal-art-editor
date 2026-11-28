@@ -421,6 +421,12 @@ wait for `/health`. With `FFAPI_TOKEN` set, it then runs the curated
 sync: a dry run first, and `--write` only if you say so. Run it before
 `deploy-web`, and both before `publish`.
 
+**Previews:** after the curated sync, `FFAPI_TOKEN=... cargo run --release
+--bin export_previews -- --upload --api https://fractalsforall.com`
+renders every built-in's picture and uploads what the server lacks or
+has from another render ([previews.md](projects/previews.md)). Not a
+`release.py` stage yet.
+
 ---
 
 ## 4b. How upgrades reach users

@@ -63,15 +63,24 @@ pub const PREVIEW_ITERATIONS: u64 =
 /// export's path; 256 samples by default). A simulation still runs its
 /// whole step count: its picture is the run at that count.
 pub async fn render_preview_async(device: &Device, queue: &Queue, config: &FractalConfig) -> image::RgbaImage {
+    render_preview_at_async(device, queue, config, PREVIEW_SIZE).await
+}
+
+/// A preview `size` pixels a side: lit as every preview is
+/// ([`render_preview_async`]), at the thumbnail's sample density -- the
+/// gallery's at 256 ([`PREVIEW_ITERATIONS`]), the server's previews at 512
+/// (docs/projects/previews.md).
+pub async fn render_preview_at_async(device: &Device, queue: &Queue, config: &FractalConfig, size: u32) -> image::RgbaImage {
     let config = preview_config(config);
-    let job = RenderJob::new(&config, PREVIEW_SIZE, PREVIEW_SIZE).with_iterations(PREVIEW_ITERATIONS);
+    let iterations = THUMBNAIL_ITERATIONS * (size as u64 * size as u64) / (THUMBNAIL_SIZE as u64 * THUMBNAIL_SIZE as u64);
+    let job = RenderJob::new(&config, size, size).with_iterations(iterations);
     let job = if config.resets_orbits() { job } else { job.with_iterations_per_thread(THUMBNAIL_ITERATIONS_PER_THREAD) };
     match render(device, queue, job, &mut NoProgress).await {
         Ok(output) => image::RgbaImage::from_raw(output.width, output.height, output.rgba_data)
-            .unwrap_or_else(|| image::RgbaImage::new(PREVIEW_SIZE, PREVIEW_SIZE)),
+            .unwrap_or_else(|| image::RgbaImage::new(size, size)),
         Err(e) => {
             log::error!("Failed to render a preview: {}", e);
-            image::RgbaImage::new(PREVIEW_SIZE, PREVIEW_SIZE)
+            image::RgbaImage::new(size, size)
         }
     }
 }

@@ -25,6 +25,10 @@ mod app;
 pub mod gpu;
 #[cfg(feature = "web-app")]
 mod ui;
+/// The server's previews (docs/projects/previews.md): render every app
+/// built-in's Catalog preview and upload it (`src/bin/export_previews.rs`).
+#[cfg(all(feature = "web-app", not(target_arch = "wasm32")))]
+pub use ui::preview_export;
 mod util;
 pub mod camera;
 pub mod scene;

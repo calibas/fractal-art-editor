@@ -331,8 +331,17 @@ pub struct EffectInstance {
 
     /// Parameter values (name → value)
     /// Missing params use defaults from registry
-    #[serde(default)]
+    #[serde(default, serialize_with = "sorted_params")]
     pub params: HashMap<String, f32>,
+}
+
+/// An effect's parameters written in name order, as a transform's maps are
+/// (`impl Serialize for Transform`): a `HashMap`'s order changes from one
+/// process to the next, and a config's JSON is hashed for its thumbnail
+/// and preview keys (`ThumbnailCache::config_hash`), so a config with an
+/// effect of two or more parameters got a new key every run.
+fn sorted_params<S: serde::Serializer>(params: &HashMap<String, f32>, s: S) -> Result<S::Ok, S::Error> {
+    params.iter().collect::<std::collections::BTreeMap<_, _>>().serialize(s)
 }
 
 // Manual PartialEq that ignores the runtime-only `id` field. Two
@@ -1959,5 +1968,24 @@ mod label_tests {
             );
             assert!(!label.starts_with("effects."), "{label}");
         }
+    }
+}
+
+#[cfg(test)]
+mod sorted_params_tests {
+    use super::*;
+
+    /// An effect's parameters serialize in name order, whatever the map's.
+    #[test]
+    fn an_effects_parameters_serialize_in_name_order() {
+        let names: Vec<String> = (0..40).map(|i| format!("p{i:02}")).collect();
+        let mut params = HashMap::new();
+        for (i, n) in names.iter().enumerate().rev() {
+            params.insert(n.clone(), i as f32);
+        }
+        let effect = EffectInstance { id: 0, effect_type: "vignette".into(), enabled: true, params };
+        let json = serde_json::to_string(&effect).unwrap();
+        let at: Vec<usize> = names.iter().map(|n| json.find(&format!("\"{n}\"")).unwrap()).collect();
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{json}");
     }
 }

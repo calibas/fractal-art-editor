@@ -286,7 +286,8 @@ Each record carries `kind`, `canonical_name`, `display_name`, `authors`,
 - the 647 variations and 18 effects. WGSL comes from the registry, as
   the corpora do today;
 - the shipped scripts and Rhai examples;
-- the Rhai twins of built-ins, where curating them is wanted.
+- the Rhai twins of built-ins: every escape and simulation built-in's,
+  under its key (2026-11-27, [previews.md](previews.md) section 4).
 
 Names come from the item's own name, made into a slug. Variations and
 effects keep theirs. Duplicates are numbered and reported.
@@ -479,9 +480,10 @@ So, with what exists:
    manifest) and ffapi's `tools/sync_curated.py`. A local dry run of
    the whole manifest agrees with the server record for record once
    ffapi parses floats exactly (serde_json `float_roundtrip`: the
-   default parser put 20 records a bit off). The manifest leaves out the
-   built-ins' Rhai twins (their names are the built-ins' own) and the
-   UF/Fractint example files; the stateful track examples were read as
+   default parser put 20 records a bit off). The manifest left out the
+   built-ins' Rhai twins (their names are the built-ins' own; curated
+   since 2026-11-27, [previews.md](previews.md) section 4) and leaves out
+   the UF/Fractint example files; the stateful track examples were read as
    formulas (`library::rhai_kind`), fixed. **Step 5 note:** hashing
    what the server serves (a fractal's config) needs exact parsing on
    the client too.
