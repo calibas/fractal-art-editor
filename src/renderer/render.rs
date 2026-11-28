@@ -240,10 +240,11 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
             }
             // A colouring from another formula family is the state right
             // after a switch, and its default draws; one in no registry
-            // is unknown.
+            // is unknown. A field colouring may be the user's (Rhai), as
+            // a field may.
             let colouring = |name: &str| {
                 crate::escape::find_coloring(name).is_some()
-                    || crate::escape::fields::FIELD_COLORINGS.iter().any(|c| c.name == name)
+                    || crate::escape::fields::find_field_coloring(name).is_some()
                     || crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == name)
             };
             if !colouring(&e.coloring) {
@@ -1710,6 +1711,29 @@ async fn render_escape_terrain(
 }
 
 /// Motion blur through `render` (docs/archive/projects/motion-blur.md).
+#[cfg(test)]
+mod unknown_names_tests {
+    use super::*;
+
+    /// A config carrying a Rhai field colouring names it by its `custom-`
+    /// name: known, as a Rhai field is, so the CLI exports it. It was
+    /// checked against the built-in field colourings alone.
+    #[test]
+    fn a_custom_field_colouring_is_known() {
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.escape.formula = "weierstrass".into();
+        let src = crate::escape::twins::field_coloring_custom_source("field_value").expect("a twin");
+        config.escape.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::FieldColoring, &src);
+        config.escape.custom_coloring = Some(src);
+        assert!(unknown_names(&config).is_empty(), "{:?}", unknown_names(&config));
+        // A name no registry holds is still unknown.
+        config.escape.custom_coloring = None;
+        config.escape.coloring = "custom-from-nowhere".into();
+        assert_eq!(unknown_names(&config).len(), 1);
+    }
+}
+
 #[cfg(test)]
 mod motion_tests {
     use super::*;

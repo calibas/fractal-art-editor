@@ -4639,7 +4639,9 @@ fn escape_lists_its_formulas_and_colorings() {
     .expect("script ran");
     let msgs = out.messages.join(",");
     let counts: Vec<usize> = msgs.split(',').map(|m| m.trim().parse().unwrap()).collect();
-    assert_eq!(counts[0], crate::escape::FORMULAS.len());
+    // Every formula the panel's picker offers: the fields and solids too.
+    assert_eq!(counts[0], crate::escape::FORMULAS.len() + crate::escape::fields::FIELDS.len() + crate::escape::ifs::IFS_DEFS.len());
+    // The colourings the formula can take: an escape-time formula's.
     assert_eq!(counts[1], crate::escape::COLORINGS.len());
     assert_eq!(counts[2], crate::escape::get_formula("phoenix").parameters.len());
 }
@@ -4940,4 +4942,128 @@ fn shipped_scripts_give_the_clis_flames_for_their_seeds() {
     assert_eq!(flame(basic, 7, None, None), value(&base), "basic_random, seed 7");
     assert_eq!(flame(jitter, 7, Some(&base), None), value(&fixture("basic_random_seed7_jitter.fae")), "jitter on it, seed 7");
     assert_eq!(flame(lsystem, 3, None, Some(("preset", "2D · Koch snowflake"))), value(&fixture("lsystem_koch_seed3.fae")), "lsystem's Koch snowflake, seed 3");
+}
+
+// ---- Fields, field colourings and solids from a script ------------------
+
+/// A Rhai source as a Rhai string literal (JSON's escapes are Rhai's):
+/// a source may hold backticks, which a backtick string cannot.
+fn rhai_literal(source: &str) -> String {
+    serde_json::to_string(source).unwrap()
+}
+
+/// A field is a formula's choice, as in the panel's picker: chosen by
+/// name it lands on its default preset (view, term count, parameters,
+/// colouring), and its parameters and its colourings' are a script's to
+/// set and list.
+#[test]
+fn a_script_chooses_a_field_by_name() {
+    let out = run(
+        r#"
+        script("Field", "generator");
+        escape.formula("weierstrass");
+        print(escape.colorings().len);
+        print(escape.formula_params().len);
+        escape.coloring("field_hillshade");
+        escape.param("a", 0.6);
+        escape.coloring_param("relief", 0.8);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let esc = &out.config.escape;
+    let field = crate::escape::fields::get_field("weierstrass").unwrap();
+    let preset = crate::escape::field_default_preset(field).unwrap();
+    assert_eq!((esc.formula.as_str(), esc.coloring.as_str()), ("weierstrass", "field_hillshade"));
+    assert_eq!(esc.max_iter, preset.max_iter, "the preset's term count");
+    assert_eq!(esc.formula_params.get("a"), Some(&0.6));
+    assert_eq!(esc.coloring_params.get("relief"), Some(&0.8));
+    let counts: Vec<usize> = out.messages.iter().map(|m| m.trim().parse().unwrap()).collect();
+    assert_eq!(counts, vec![crate::escape::fields::FIELD_COLORINGS.len(), field.parameters.len()]);
+}
+
+/// A colouring of another family than the formula's would render as the
+/// family's default: refused, naming both. And back to an escape-time
+/// formula, the colouring is its family's default again.
+#[test]
+fn a_colouring_must_suit_its_formula() {
+    let err = run(
+        r#"
+        script("Mismatch", "generator");
+        escape.formula("mandelbrot");
+        escape.coloring("field_value");
+        "#,
+        1,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("colours a field") && err.message.contains("escape-time formula"), "{}", err.message);
+    let out = run(
+        r#"
+        script("Back", "generator");
+        escape.formula("weierstrass");
+        escape.formula("mandelbrot");
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let esc = &out.config.escape;
+    assert_eq!(esc.coloring, crate::config::escape::EscapeConfig::default().coloring);
+    assert!(crate::escape::find_coloring(&esc.coloring).is_some());
+}
+
+/// A solid chosen by name takes its own colouring and the 3D look, as
+/// the panel's choice does (`config::mode::look_3d`): applying the look
+/// again changes nothing.
+#[test]
+fn a_script_chooses_a_solid_by_name() {
+    let out = run(
+        r#"
+        script("Solid", "generator");
+        escape.formula("mandelbulb_solid");
+        escape.param("levels", 20);
+        "#,
+        1,
+    )
+    .expect("script ran");
+    let def = crate::escape::ifs::get_ifs("mandelbulb_solid").unwrap();
+    assert_eq!(out.config.escape.coloring, def.default_coloring);
+    assert_eq!(out.config.escape.formula_params.get("levels"), Some(&20.0));
+    let mut again = out.config.clone();
+    for (path, value) in crate::config::mode::look_3d(&crate::config::FractalConfig::default(), &out.config) {
+        crate::config::apply(&mut again, crate::config::EditingTarget::Main, &path, value).unwrap();
+    }
+    assert_eq!(serde_json::to_value(&again).unwrap(), serde_json::to_value(&out.config).unwrap(), "the 3D look was applied");
+}
+
+/// A Rhai field and field colouring, and a Rhai solid, by their sources
+/// alone: each routed to its own registry by what it defines, as the
+/// panel and a saved config route them, and carried by the config.
+#[test]
+fn rhai_fields_field_colourings_and_solids_by_source() {
+    let field = crate::escape::twins::FIELD_TWINS.iter().find(|(n, _)| *n == "weierstrass").unwrap().1;
+    let shade = crate::escape::twins::FIELD_COLORING_TWINS.iter().find(|(n, _)| *n == "field_hillshade").unwrap().1;
+    let solid = crate::escape::twins::SOLID_TWINS.iter().find(|(n, _)| *n == "mandelbulb_solid").unwrap().1;
+    let out = run(
+        &format!(
+            "script(\"Sources\", \"generator\");\nescape.custom_formula({});\nescape.custom_coloring({});\n",
+            rhai_literal(field),
+            rhai_literal(shade)
+        ),
+        1,
+    )
+    .expect("script ran");
+    let esc = &out.config.escape;
+    assert!(crate::escape::fields::get_field(&esc.formula).is_some(), "a field: {}", esc.formula);
+    assert!(crate::escape::fields::find_field_coloring(&esc.coloring).is_some(), "a field colouring: {}", esc.coloring);
+    assert!(esc.custom_formula.is_some() && esc.custom_coloring.is_some());
+    assert!(crate::renderer::render::unknown_names(&out.config).is_empty());
+
+    let out = run(&format!("script(\"Solid\", \"generator\");\nescape.custom_formula({});\n", rhai_literal(solid)), 1).expect("script ran");
+    let esc = &out.config.escape;
+    let def = crate::escape::ifs::get_ifs(&esc.formula).expect("a solid");
+    assert_eq!(esc.coloring, def.default_coloring);
+
+    // A field colouring for an escape-time formula is refused.
+    let err = run(&format!("script(\"Wrong\", \"generator\");\nescape.formula(\"mandelbrot\");\nescape.custom_coloring({});\n", rhai_literal(shade)), 1).unwrap_err();
+    assert!(err.message.contains("colours a field"), "{}", err.message);
 }

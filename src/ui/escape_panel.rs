@@ -2764,39 +2764,7 @@ pub fn apply_field_preset(
     field: &'static crate::escape::fields::FieldDef,
     preset: &crate::escape::EscapePreset,
 ) -> Result<(), crate::config::manager::ConfigError> {
-    let coloring = crate::escape::fields::get_field_coloring(preset.coloring, field);
-    let mut changes: Vec<(ConfigPath, ConfigValue)> = vec![
-        (ConfigPath::EscapeFormula, ConfigValue::String(field.name.to_string())),
-        (ConfigPath::EscapeColoring, ConfigValue::String(coloring.name.to_string())),
-        (ConfigPath::EscapeCenterRe, ConfigValue::String(preset.center_re.to_string())),
-        (ConfigPath::EscapeCenterIm, ConfigValue::String(preset.center_im.to_string())),
-        (ConfigPath::EscapeZoomLog2, (preset.zoom_log2 as f32).into()),
-        (ConfigPath::EscapeMaxIter, ConfigValue::UInt(preset.max_iter)),
-    ];
-    for p in field.parameters {
-        let v = preset
-            .formula_params
-            .iter()
-            .find(|(k, _)| *k == p.name)
-            .map(|(_, v)| *v)
-            .unwrap_or(p.slot_default());
-        changes.push((
-            ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
-            v.into(),
-        ));
-    }
-    for p in coloring.parameters {
-        let v = preset
-            .coloring_params
-            .iter()
-            .find(|(k, _)| *k == p.name)
-            .map(|(_, v)| *v)
-            .unwrap_or(p.slot_default());
-        changes.push((
-            ConfigPath::EscapeColoringParam { param: p.name.to_string() },
-            v.into(),
-        ));
-    }
+    let changes = crate::escape::field_preset_changes(field, preset);
     super::render_mode::choose(config_manager, changes, "history.action.escape_preset", RenderMode::Escape).map(|_| ())
 }
 

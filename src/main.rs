@@ -48,13 +48,13 @@ enum Commands {
     /// List available FFmpeg encoders and hardware acceleration options
     ListEncoders,
 
-    /// Run a flame script to produce a .fflame (headless)
+    /// Run a flame script to produce a .fae (headless)
     Generate {
         /// Script file (.rhai)
         #[arg(short, long)]
         script: String,
 
-        /// Output .fflame (defaults to the script name)
+        /// Output .fae (defaults to the script name)
         #[arg(short, long)]
         output: Option<String>,
 
@@ -81,7 +81,7 @@ enum Commands {
 
     /// Export flame configs to PNG (headless batch mode)
     Export {
-        /// Input .fflame config file or directory
+        /// Input .fae config file or directory
         #[arg(short, long)]
         input: String,
 
@@ -134,7 +134,7 @@ enum Commands {
 
     /// Export animation to video (pipes directly to ffmpeg, requires ffmpeg in PATH)
     ExportAnimation {
-        /// Input .fflame config file (base flame state). Optional when the
+        /// Input .fae config file (base flame state). Optional when the
         /// .anim embeds a base config (an animation saved from the app
         /// does); given anyway, it wins over the embedded one.
         #[arg(short, long)]

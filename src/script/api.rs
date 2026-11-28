@@ -1732,51 +1732,158 @@ fn register_escape(engine: &mut Engine) {
         }
     }
 
-    engine.register_fn(
-        "formula",
-        |e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
-            if crate::escape::FORMULAS.iter().all(|f| f.name != name) {
-                return Err(err(format!(
-                    "unknown escape formula `{name}` - see escape.formulas()"
-                )));
+    // The formula families, as the Escape panel's formula picker offers
+    // them: an escape-time formula (mode A), a field (mode B) or a solid
+    // (mode D), each with its own colourings.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Family {
+        Iterated,
+        Field,
+        Solid,
+    }
+    impl Family {
+        fn noun(self) -> &'static str {
+            match self {
+                Family::Iterated => "an escape-time formula",
+                Family::Field => "a field",
+                Family::Solid => "a distance set (a solid or the Flame Attractor)",
             }
-            let mut cfg = e.cfg.borrow_mut();
-            enter(&mut cfg);
-            if cfg.escape.formula != name {
-                // Parameters belong to the formula that declared them.
-                cfg.escape.formula_params.clear();
+        }
+        /// The family's colourings, by name (the built-ins).
+        fn colorings(self) -> Vec<&'static str> {
+            match self {
+                Family::Iterated => crate::escape::COLORINGS.iter().map(|c| c.name).collect(),
+                Family::Field => crate::escape::fields::FIELD_COLORINGS.iter().map(|c| c.name).collect(),
+                Family::Solid => crate::escape::ifs::IFS_COLORINGS.iter().map(|c| c.name).collect(),
             }
-            cfg.escape.formula = name.to_string();
-            Ok(())
-        },
-    );
-    engine.register_fn(
-        "coloring",
-        |e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
-            if crate::escape::COLORINGS.iter().all(|c| c.name != name) {
-                return Err(err(format!(
-                    "unknown escape coloring `{name}` - see escape.colorings()"
-                )));
-            }
-            let mut cfg = e.cfg.borrow_mut();
-            enter(&mut cfg);
-            if cfg.escape.coloring != name {
-                cfg.escape.coloring_params.clear();
-                // What a fresh pick in the panel takes (debanded
-                // averages, and the bailout the colouring is best
-                // drawn at), so a script and a click agree.
-                let def = crate::escape::get_coloring(name);
+        }
+    }
+    fn formula_family(name: &str) -> Option<Family> {
+        if crate::escape::fields::get_field(name).is_some() {
+            Some(Family::Field)
+        } else if crate::escape::ifs::get_ifs(name).is_some() {
+            Some(Family::Solid)
+        } else if crate::escape::find_formula(name).is_some() {
+            Some(Family::Iterated)
+        } else {
+            None
+        }
+    }
+    fn coloring_family(name: &str) -> Option<Family> {
+        if crate::escape::fields::find_field_coloring(name).is_some() {
+            Some(Family::Field)
+        } else if crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == name) {
+            Some(Family::Solid)
+        } else if crate::escape::find_coloring(name).is_some() {
+            Some(Family::Iterated)
+        } else {
+            None
+        }
+    }
+    /// A colouring of another family than the formula's would render as
+    /// the family's default: refused, naming both.
+    fn check_family(cfg: &crate::config::FractalConfig, name: &str, family: Family) -> Result<(), Box<EvalAltResult>> {
+        match formula_family(&cfg.escape.formula) {
+            Some(f) if f != family => Err(err(format!(
+                "`{name}` colours {}, and the formula `{}` is {} - see escape.colorings()",
+                family.noun(),
+                cfg.escape.formula,
+                f.noun()
+            ))),
+            _ => Ok(()),
+        }
+    }
+    /// The colouring set as a fresh pick in the panel sets it, so a
+    /// script and a click agree: its parameters start over, and an
+    /// escape-time colouring of an escape-time formula takes what the
+    /// pick takes (debanded averages, the bailout it is best drawn at).
+    fn pick_coloring(cfg: &mut crate::config::FractalConfig, name: &str) {
+        if cfg.escape.coloring != name {
+            cfg.escape.coloring_params.clear();
+            let def = crate::escape::find_coloring(name);
+            let formula = crate::escape::find_formula(&cfg.escape.formula).filter(|_| formula_family(&cfg.escape.formula) == Some(Family::Iterated));
+            if let (Some(def), Some(formula)) = (def, formula) {
                 for (param, v) in def.pick_params {
                     cfg.escape.coloring_params.insert(param.to_string(), *v);
                 }
-                let formula = crate::escape::get_formula(&cfg.escape.formula);
                 let fparams = crate::escape::packed_formula_params(formula, &cfg.escape.formula_params);
                 let biomorph_off = cfg.escape.biomorph == crate::config::escape::BiomorphMode::Off;
                 if let Some(b) = crate::escape::suggested_bailout(formula, &fparams, def, biomorph_off) {
                     cfg.escape.bailout = b;
                 }
             }
-            cfg.escape.coloring = name.to_string();
+        }
+        cfg.escape.coloring = name.to_string();
+    }
+    /// Choose the formula `name` (a built-in, or the source `custom`
+    /// compiled under it). Its parameters start over on a new name. On a
+    /// new family it lands where the panel's choice does: a field on its
+    /// default preset (the view, the term count, the parameters and its
+    /// colouring), a solid and an escape-time formula with their
+    /// family's default colouring, a solid with the 3D look. Within a
+    /// family nothing else moves: a script sets the view it wants.
+    fn choose_formula(cfg: &mut crate::config::FractalConfig, name: &str, custom: Option<crate::config::escape::CustomSource>) {
+        let before = cfg.clone();
+        let was = formula_family(&cfg.escape.formula);
+        enter(cfg);
+        if cfg.escape.formula != name {
+            // Parameters belong to the formula that declared them.
+            cfg.escape.formula_params.clear();
+        }
+        cfg.escape.formula = name.to_string();
+        if custom.is_some() {
+            cfg.escape.custom_formula = custom;
+        }
+        let now = formula_family(name);
+        if now == was {
+            return;
+        }
+        let apply = |cfg: &mut crate::config::FractalConfig, changes: Vec<(crate::config::ConfigPath, crate::config::ConfigValue)>| {
+            for (path, value) in changes {
+                let _ = crate::config::apply(cfg, crate::config::EditingTarget::Main, &path, value);
+            }
+        };
+        match now {
+            Some(Family::Field) => {
+                let field = crate::escape::fields::get_field(name).expect("a field");
+                match crate::escape::field_default_preset(field) {
+                    Some(preset) => apply(cfg, crate::escape::field_preset_changes(field, preset)),
+                    None => pick_coloring(cfg, field.default_coloring),
+                }
+            }
+            Some(Family::Solid) => pick_coloring(cfg, crate::escape::ifs::get_ifs(name).expect("a solid").default_coloring),
+            Some(Family::Iterated) => pick_coloring(cfg, &crate::config::escape::EscapeConfig::default().coloring),
+            None => {}
+        }
+        let look = crate::config::mode::look_3d(&before, cfg);
+        apply(cfg, look);
+    }
+
+    engine.register_fn(
+        "formula",
+        |e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            if formula_family(name).is_none() {
+                return Err(err(format!(
+                    "unknown escape formula `{name}` - see escape.formulas()"
+                )));
+            }
+            let mut cfg = e.cfg.borrow_mut();
+            choose_formula(&mut cfg, name, None);
+            Ok(())
+        },
+    );
+    engine.register_fn(
+        "coloring",
+        |e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            let Some(family) = coloring_family(name) else {
+                return Err(err(format!(
+                    "unknown escape coloring `{name}` - see escape.colorings()"
+                )));
+            };
+            let mut cfg = e.cfg.borrow_mut();
+            check_family(&cfg, name, family)?;
+            enter(&mut cfg);
+            pick_coloring(&mut cfg, name);
             Ok(())
         },
     );
@@ -1807,36 +1914,28 @@ fn register_escape(engine: &mut Engine) {
             .collect();
         err(format!("`{}` does not compile:\n{}", src.entry, lines.join("\n")))
     }
+    // A source in the formula's place may be a formula, a field or a
+    // solid, in the colouring's a colouring or a field colouring: what
+    // a Rhai source defines says which (`custom::prepare_in_place`, as
+    // the panel and a saved config route it). It carries the variations
+    // it calls (`vary`), collected as its own kind.
     fn set_custom_formula(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
-        use crate::lang::EntryKind;
-        // With the variations it calls (`vary`), which the config carries.
-        let src = crate::escape::custom::with_called_variations(EntryKind::Formula, src);
-        let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
-        if let Err(d) = crate::escape::custom::compile_formula(&src, &name) {
-            return Err(compile_error(&src, &d));
-        }
+        let original = src.clone();
+        let (_, name, src) =
+            crate::escape::custom::prepare_in_place(crate::lang::EntryKind::Formula, src).map_err(|d| compile_error(&original, &d))?;
         let mut cfg = e.cfg.borrow_mut();
-        enter(&mut cfg);
-        if cfg.escape.formula != name {
-            cfg.escape.formula_params.clear();
-        }
-        cfg.escape.formula = name;
-        cfg.escape.custom_formula = Some(src);
+        choose_formula(&mut cfg, &name, Some(src));
         Ok(())
     }
     fn set_custom_coloring(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
         use crate::lang::EntryKind;
-        let src = crate::escape::custom::with_called_variations(EntryKind::Coloring, src);
-        let name = crate::escape::custom::name_of(EntryKind::Coloring, &src);
-        if let Err(d) = crate::escape::custom::compile_coloring(&src, &name) {
-            return Err(compile_error(&src, &d));
-        }
+        let original = src.clone();
+        let (kind, name, src) = crate::escape::custom::prepare_in_place(EntryKind::Coloring, src).map_err(|d| compile_error(&original, &d))?;
+        let family = if kind == EntryKind::FieldColoring { Family::Field } else { Family::Iterated };
         let mut cfg = e.cfg.borrow_mut();
+        check_family(&cfg, &src.entry, family)?;
         enter(&mut cfg);
-        if cfg.escape.coloring != name {
-            cfg.escape.coloring_params.clear();
-        }
-        cfg.escape.coloring = name;
+        pick_coloring(&mut cfg, &name);
         cfg.escape.custom_coloring = Some(src);
         Ok(())
     }
@@ -1859,10 +1958,15 @@ fn register_escape(engine: &mut Engine) {
         },
     );
     // A Rhai formula: its source alone, one formula to a source
-    // (phase 4, step 8).
+    // (phase 4, step 8); a field or a solid as well.
     engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
         let entry = crate::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
         set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
+    });
+    // A Rhai colouring, or a field colouring: its source alone.
+    engine.register_fn("custom_coloring", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
+        let entry = crate::lang::rhai::title(source).unwrap_or_else(|| "Coloring".into());
+        set_custom_coloring(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
     });
     // A formula from the script's own function `f(z, c)`, its step:
     // the Mandelbrot's shape on both planes. The config carries it as
@@ -1950,8 +2054,8 @@ fn register_escape(engine: &mut Engine) {
     // what a script needs to sweep or animate them (phase 4, step 8).
     engine.register_fn("formula_params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
-        let Some(def) = crate::escape::find_formula(&cfg.escape.formula) else { return Array::new() };
-        def.parameters
+        let Some((_, parameters)) = crate::escape::owner_params(&cfg.escape, crate::escape::ParamOf::Formula) else { return Array::new() };
+        parameters
             .iter()
             .map(|p| {
                 let mut m = rhai::Map::new();
@@ -1969,16 +2073,25 @@ fn register_escape(engine: &mut Engine) {
             .collect()
     });
 
+    // Every formula the panel's picker offers: the escape-time formulas,
+    // the fields, the solids.
     engine.register_fn("formulas", |_e: &mut EscapeHandle| -> Array {
         crate::escape::FORMULAS
             .iter()
-            .map(|f| Dynamic::from(f.name.to_string()))
+            .map(|f| f.name)
+            .chain(crate::escape::fields::FIELDS.iter().map(|f| f.name))
+            .chain(crate::escape::ifs::IFS_DEFS.iter().map(|d| d.name))
+            .map(|n| Dynamic::from(n.to_string()))
             .collect()
     });
-    engine.register_fn("colorings", |_e: &mut EscapeHandle| -> Array {
-        crate::escape::COLORINGS
-            .iter()
-            .map(|c| Dynamic::from(c.name.to_string()))
+    // The colourings the current formula can take: its family's.
+    engine.register_fn("colorings", |e: &mut EscapeHandle| -> Array {
+        let cfg = e.cfg.borrow();
+        formula_family(&cfg.escape.formula)
+            .unwrap_or(Family::Iterated)
+            .colorings()
+            .into_iter()
+            .map(|n| Dynamic::from(n.to_string()))
             .collect()
     });
 
@@ -2310,22 +2423,22 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
-            let def = crate::escape::find_formula(&cfg.escape.formula)
+            // The formula's, the field's or the solid's.
+            let (owner, parameters) = crate::escape::owner_params(&cfg.escape, crate::escape::ParamOf::Formula)
                 .ok_or_else(|| err(format!("no such formula `{}`", cfg.escape.formula)))?;
             // `name.r` / `name.angle`: a complex parameter as a point in
             // polar form (`EscapeConfig::formula_param`).
             let polar = name.strip_suffix(".r").or_else(|| name.strip_suffix(".angle"));
-            let complex = polar.is_some_and(|base| def.parameters.iter().any(|p| p.name.strip_suffix(".re") == Some(base)));
-            if !complex && !def.parameters.iter().any(|p| p.name == name) {
-                let known: Vec<&str> = def.parameters.iter().map(|p| &*p.name).collect();
+            let complex = polar.is_some_and(|base| parameters.iter().any(|p| p.name.strip_suffix(".re") == Some(base)));
+            if !complex && !parameters.iter().any(|p| p.name == name) {
+                let known: Vec<&str> = parameters.iter().map(|p| &*p.name).collect();
                 return Err(err(format!(
-                    "`{}` has no parameter `{name}` (it has: {})",
-                    def.name,
+                    "`{owner}` has no parameter `{name}` (it has: {})",
                     if known.is_empty() { "none".to_string() } else { known.join(", ") }
                 )));
             }
             enter(&mut cfg);
-            let defaults = |p: &str| def.parameters.iter().find(|q| q.name == p).map(|q| q.slot_default());
+            let defaults = |p: &str| parameters.iter().find(|q| q.name == p).map(|q| q.slot_default());
             for (k, v) in cfg.escape.formula_param_writes(name, value as f32, defaults) {
                 cfg.escape.formula_params.insert(k, v);
             }
@@ -2337,13 +2450,13 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
-            let def = crate::escape::find_coloring(&cfg.escape.coloring)
+            // The colouring that renders: the formula's family's.
+            let (owner, parameters) = crate::escape::owner_params(&cfg.escape, crate::escape::ParamOf::Coloring)
                 .ok_or_else(|| err(format!("no such coloring `{}`", cfg.escape.coloring)))?;
-            if !def.parameters.iter().any(|p| p.name == name) {
-                let known: Vec<&str> = def.parameters.iter().map(|p| &*p.name).collect();
+            if !parameters.iter().any(|p| p.name == name) {
+                let known: Vec<&str> = parameters.iter().map(|p| &*p.name).collect();
                 return Err(err(format!(
-                    "coloring `{}` has no parameter `{name}` (it has: {})",
-                    def.name,
+                    "coloring `{owner}` has no parameter `{name}` (it has: {})",
                     if known.is_empty() { "none".to_string() } else { known.join(", ") }
                 )));
             }
@@ -2412,24 +2525,14 @@ fn register_escape(engine: &mut Engine) {
     });
     engine.register_fn("params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
-        crate::escape::find_formula(&cfg.escape.formula)
-            .map(|d| {
-                d.parameters
-                    .iter()
-                    .map(|p| Dynamic::from(p.name.to_string()))
-                    .collect()
-            })
+        crate::escape::owner_params(&cfg.escape, crate::escape::ParamOf::Formula)
+            .map(|(_, ps)| ps.iter().map(|p| Dynamic::from(p.name.to_string())).collect())
             .unwrap_or_default()
     });
     engine.register_fn("coloring_params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
-        crate::escape::find_coloring(&cfg.escape.coloring)
-            .map(|d| {
-                d.parameters
-                    .iter()
-                    .map(|p| Dynamic::from(p.name.to_string()))
-                    .collect()
-            })
+        crate::escape::owner_params(&cfg.escape, crate::escape::ParamOf::Coloring)
+            .map(|(_, ps)| ps.iter().map(|p| Dynamic::from(p.name.to_string())).collect())
             .unwrap_or_default()
     });
 }

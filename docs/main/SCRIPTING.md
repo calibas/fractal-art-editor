@@ -254,15 +254,28 @@ a Log-calibrated tone map becomes Linear at escape's calibration
 (exposure 2, gamma 1), because flame presets carry Log-calibrated
 values under which escape output renders black.
 
+**Three families of formula**, as the Escape panel's formula picker
+offers them: an escape-time formula (mode A: Mandelbrot and kin), a
+**field** (mode B: `weierstrass`, `markus_lyapunov`,
+`standard_map_ftle`, or a Rhai file with `fn term`), and a **distance
+set** (mode D: the solids `mandelbulb_solid` and kin, a Rhai file with
+`fn distance`, and the Flame Attractor). Each family has its own
+colourings: a field's are `field_value`, `field_diverging`,
+`field_hillshade` (or a Rhai file with `fn shade`), a distance set's
+the `ifs_*` ones. A field's term count is `escape.max_iter`; a solid's
+iteration count is its `levels` parameter (`escape.param("levels",
+...)`), not `max_iter`.
+
 | call | returns | what it does |
 |---|---|---|
-| `escape.formula(name)` | — | Picks the formula. An unknown name throws and lists where to look. Changing formula **clears the formula parameters**, which belong to the formula that declared them. |
-| `escape.coloring(name)` | — | Picks the coloring; likewise clears the coloring parameters, then sets the ones a fresh pick in the panel does (the averages start debanded). |
-| `escape.formulas()` | array | Every formula name, so a script can iterate the catalog instead of copying a list out of these docs. |
-| `escape.colorings()` | array | Every coloring name. |
+| `escape.formula(name)` | — | Picks the formula: an escape-time formula, a field or a distance set. An unknown name throws and lists where to look. Changing formula **clears the formula parameters**, which belong to the formula that declared them. Picking one of **another family** lands where the panel's choice does: a field on its default preset (the view, the term count, the parameters and its colouring), a distance set with its own colouring and, a solid, the 3D look; an escape-time formula with the default colouring. Within a family nothing else moves, so set the view after choosing. |
+| `escape.coloring(name)` | — | Picks the coloring; likewise clears the coloring parameters, then sets the ones a fresh pick in the panel does (the averages start debanded). It must be of the formula's family (a field colouring for a field, and so on): another family's throws, naming both. |
+| `escape.formulas()` | array | Every formula name of all three families, so a script can iterate the catalog instead of copying a list out of these docs. |
+| `escape.colorings()` | array | The colourings the current formula can take: its family's. |
 | `escape.custom_formula(source, entry)` | — | A formula written in **Ultra Fractal's language**: `source` is the text of a `.ufm` file, `entry` the name of the formula in it. Write a multi-line source as a backtick string (`` `M { ... }` ``). It is compiled here, and a compile error throws with the line and column of each message. The config then carries the source, so the saved file renders anywhere. `escape.custom_formula(source, entry, "fractint")` reads a Fractint `.frm` entry, and `escape.custom_formula(source, "", "rhai")` a Rhai formula (`fn start`, `fn step`, `fn escaped`; the formula language's own). Custom formulas deep-zoom when their equations derive. Language reference: [ESCAPE.md](ESCAPE.md#the-formula-language). |
 | `escape.custom_coloring(source, entry)` | — | A colouring written in Ultra Fractal's language (a `.ucl` entry), the same way. It runs on every path, deep zoom included. |
-| `escape.custom_formula(source)` | — | A Rhai formula by its source alone (one formula to a source; its title is its `INFO.title`). |
+| `escape.custom_formula(source)` | — | A Rhai formula by its source alone (one formula to a source; its title is its `INFO.title`). A Rhai **field** (a source with `fn term`) or **solid** (`fn distance`) is chosen the same way, by what the source defines, as `escape.formula` chooses a built-in one. |
+| `escape.custom_coloring(source)` | — | A Rhai colouring by its source alone; a **field colouring** (a source with `fn shade`) the same way, for a field. |
 | `escape.hybrid(groups)` / `escape.hybrid(groups, loop_start)` | — | A hybrid composed in the script, as the Hybrid Designer composes one: `groups` an array of maps, each with `repeats` (default 1) and what the group runs -- `twin` (a built-in's name: `"mandelbrot"`, `"burning_ship"`, ...) or `formula` (Rhai source), or KF's `lines` as the hybrid's JSON has them -- and optionally `blend_twin` / `blend`, a second formula the group mixes with by its `g<N>_mix` parameter. `loop_start` is the group the loop returns to. Example: `escape.hybrid([#{ twin: "mandelbrot" }, #{ twin: "burning_ship", repeats: 2 }])`. |
 | `escape.formula_fn(name)` | — | A formula from the script's own function `name(z, c)`, returning the next z: the Mandelbrot's shape on both planes (z from 0 and c the pixel; on the Julia plane z the pixel and c the constant), the panel's bailout its test. The function may call the script's other functions as helpers; each reads only its arguments, and uses the formula language's operations (`complex(re, im)`, `z.re`, `abs`, `**` ...). The config carries the formula as Rhai source. Example: `fn ship(z, c) { let a = complex(z.re.abs(), z.im.abs()); a * a + c }` then `escape.formula_fn("ship")`. |
 | `escape.formula_params()` | array | The formula's parameters, each a map: `name`, `caption`, `min`, `max`, `default`, `value`, `choices` (an array of labels, empty for a continuous one) and `exponential` (its slider runs logarithmically: declared so, or a range spanning five decades). A complex parameter is two, `name.re` and `name.im`; `escape.param("name.r", v)` and `escape.param("name.angle", degrees)` set it as a point in polar form. |
@@ -293,7 +306,7 @@ values under which escape output renders black.
 | `escape.rotation` | float | Read/write the view rotation, in radians. |
 | `escape.julia(re, im)` | — | Switch to the Julia plane at that constant. |
 | `escape.no_julia()` | — | Back to the parameter plane. |
-| `escape.param(name, value)` | — | A formula parameter, checked against the registry: an unknown name throws and lists the ones the formula has. |
+| `escape.param(name, value)` | — | A formula parameter (a field's or a distance set's too), checked against the registry: an unknown name throws and lists the ones the formula has. |
 | `escape.coloring_param(name, value)` | — | The same for the coloring. |
 | `escape.params()` | array | The current formula's parameter names. |
 | `escape.coloring_params()` | array | The current coloring's parameter names. |

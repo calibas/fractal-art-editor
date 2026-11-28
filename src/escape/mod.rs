@@ -285,6 +285,32 @@ pub fn field_default_preset(field: &fields::FieldDef) -> Option<&'static EscapeP
     field.presets.first()
 }
 
+/// A field's preset as config changes: the field, its colouring (the
+/// preset's, else the field's default), the view, the term count and
+/// every parameter of both, a value the preset leaves out at its
+/// default. The Escape panel's preset and a script's switch to a field
+/// apply the same ones.
+pub fn field_preset_changes(field: &'static fields::FieldDef, preset: &EscapePreset) -> Vec<(crate::config::ConfigPath, crate::config::ConfigValue)> {
+    use crate::config::{ConfigPath, ConfigValue};
+    let coloring = fields::get_field_coloring(preset.coloring, field);
+    let mut changes: Vec<(ConfigPath, ConfigValue)> = vec![
+        (ConfigPath::EscapeFormula, ConfigValue::String(field.name.to_string())),
+        (ConfigPath::EscapeColoring, ConfigValue::String(coloring.name.to_string())),
+        (ConfigPath::EscapeCenterRe, ConfigValue::String(preset.center_re.to_string())),
+        (ConfigPath::EscapeCenterIm, ConfigValue::String(preset.center_im.to_string())),
+        (ConfigPath::EscapeZoomLog2, (preset.zoom_log2 as f32).into()),
+        (ConfigPath::EscapeMaxIter, ConfigValue::UInt(preset.max_iter)),
+    ];
+    let value = |given: &[(&str, f32)], p: &crate::params::ParamDef| given.iter().find(|(k, _)| *k == p.name).map(|(_, v)| *v).unwrap_or(p.slot_default());
+    for p in field.parameters {
+        changes.push((ConfigPath::EscapeFormulaParam { param: p.name.to_string() }, value(preset.formula_params, p).into()));
+    }
+    for p in coloring.parameters {
+        changes.push((ConfigPath::EscapeColoringParam { param: p.name.to_string() }, value(preset.coloring_params, p).into()));
+    }
+    changes
+}
+
 /// Which of the iteration controls the assembled shader will read.
 ///
 /// Every one of these is spliced conditionally, so a control the
@@ -643,6 +669,42 @@ pub enum ParamOf {
     Lens,
 }
 
+/// The config's formula or colouring (`ParamOf::Formula` /
+/// `ParamOf::Coloring`) as it renders, whichever registry owns the
+/// formula (mode A, B or D): its name and parameters. A colouring of
+/// another family -- the state right after a switch -- is the family's
+/// default, as the renderer resolves it; an unknown mode-A name the
+/// fallback. `None` for the layer and the lens.
+pub fn owner_params(escape: &crate::config::escape::EscapeConfig, of: ParamOf) -> Option<(&'static str, &'static [crate::params::ParamDef])> {
+    let ifs = ifs::get_ifs(&escape.formula);
+    let field = fields::get_field(&escape.formula);
+    Some(match of {
+        ParamOf::Formula => match (ifs, field) {
+            (Some(d), _) => (d.name, d.parameters),
+            (None, Some(f)) => (f.name, f.parameters),
+            (None, None) => {
+                let f = get_formula(&escape.formula);
+                (f.name, f.parameters)
+            }
+        },
+        ParamOf::Coloring => match (ifs, field) {
+            (Some(d), _) => {
+                let c = ifs::get_ifs_coloring(&escape.coloring, d);
+                (c.name, c.parameters)
+            }
+            (None, Some(f)) => {
+                let c = fields::get_field_coloring(&escape.coloring, f);
+                (c.name, c.parameters)
+            }
+            (None, None) => {
+                let c = get_coloring(&escape.coloring);
+                (c.name, c.parameters)
+            }
+        },
+        ParamOf::Layer | ParamOf::Lens => return None,
+    })
+}
+
 /// The default of a parameter the config's map does not hold -- what the
 /// panel shows for it, from whichever registry owns the formula (mode A,
 /// B or D), its colouring, the colouring layer, or the lens's variation.
@@ -650,19 +712,8 @@ pub enum ParamOf {
 /// undoing a first edit wrote it (Smooth's Scale to 0, below its minimum).
 pub fn param_default(escape: &crate::config::escape::EscapeConfig, of: ParamOf, name: &str) -> Option<f32> {
     let find = |ps: &[crate::params::ParamDef]| ps.iter().find(|p| p.name == name).map(|p| p.slot_default());
-    let ifs = ifs::get_ifs(&escape.formula);
-    let field = fields::get_field(&escape.formula);
     match of {
-        ParamOf::Formula => match (ifs, field) {
-            (Some(d), _) => find(d.parameters),
-            (None, Some(f)) => find(f.parameters),
-            (None, None) => find(get_formula(&escape.formula).parameters),
-        },
-        ParamOf::Coloring => match (ifs, field) {
-            (Some(d), _) => find(ifs::get_ifs_coloring(&escape.coloring, d).parameters),
-            (None, Some(f)) => find(fields::get_field_coloring(&escape.coloring, f).parameters),
-            (None, None) => find(get_coloring(&escape.coloring).parameters),
-        },
+        ParamOf::Formula | ParamOf::Coloring => owner_params(escape, of).and_then(|(_, ps)| find(ps)),
         ParamOf::Layer => layer_of(escape).and_then(|l| find(l.parameters)),
         ParamOf::Lens => {
             let registry = crate::variations::global_registry();
