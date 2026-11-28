@@ -411,6 +411,17 @@ formula's derivative), `switch.rs` (a `switch:` pair as one program),
 floats: the reference orbit), `periodic.rs` (its nucleus search).
 `src/escape/custom.rs` registers a compiled entry.
 
+**Rhai's reserved words** can't name a variable, a parameter or a
+function, though most mean nothing in Rhai yet. A name that fails to
+parse for no visible reason is likely one of them: `nil`, `null`,
+`void`, `default`, `match`, `case`, `new`, `use`, `with`, `module`,
+`package`, `static`, `var`, `shared`, `public`, `protected`, `super`,
+`this`, `is`, `go`, `goto`, `spawn`, `thread`, `sync`, `async`,
+`await`, `yield` (rhai 1.25's `RESERVED_LIST`), besides its keywords
+(`let`, `const`, `fn`, `if`, `else`, `while`, `loop`, `for`, `in`,
+`return`, `break`, `continue`, `true`, `false`, `print`, `eval` and
+the rest).
+
 **A Rhai formula** (`lang/rhai.rs`, a `.rhai` file, one formula; the
 dialect `rhai`) is three functions and its parameters' metadata:
 
@@ -837,7 +848,11 @@ fn escaped(s, p) {
   being measured -- `z`, the iterate, a vector, and `dr`, the running
   derivative, read by the colourings -- `fn step(s, p)` is one
   iteration, `fn escaped(s, p)` the stop (without it every iteration
-  runs), `fn distance(s, p)` the estimate after the last one. It renders
+  runs), `fn distance(s, p)` the estimate after the last one. How many
+  iterations is the template's `levels` parameter (Iterations: 16, at
+  most 64), not the panel's Max Iterations, as for every solid; a solid
+  that needs more declares `levels` in its `PARAMS` with its own default
+  and range (*The built-in solids' twins*, below). It renders
   in mode D ("Use as solid"; see *Mode D*). The position is `#pixel` and
   `#pixelz`, the estimate `#index` in `final:`. `fn prepare(p)` computes
   values once per picture (UF's `global:`), read as `p.name` -- the CPU
@@ -1369,7 +1384,8 @@ fn escaped(s, p) {
   What a solid needed for them:
   - **Template parameters it declares** (`custom::solid_layout`): a
     solid's `PARAMS` may name any of the template's first seven
-    (`iterations`, `w_slice`, ...) or `colour_depth`, which then take
+    (`levels`, `beam`, `steps`, `shadow`, `shadow_sharpness`,
+    `occlusion`, `w_slice`) or `colour_depth`, which then take
     that parameter's slot with the solid's own default, range and hint
     -- the Quaternion Julia reads Slice Value so, and each twin gives
     Colour Depth its built-in's hint. `INFO.coloring` names the default

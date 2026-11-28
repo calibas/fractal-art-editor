@@ -5020,6 +5020,11 @@ impl<'s> Lowerer<'s> {
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
                 "effect_time" | "effect_dt" => TypeName::Float,
                 "effect_pass" | "effect_passes" | "effect_step" | "effect_level" | "effect_levels" | "effect_frame" => TypeName::Int,
+                // A field colouring's inputs (`Predef::FieldSum`, ...): `let
+                // code = sum;` declared a complex without them, so its
+                // arithmetic refused to go back into a number.
+                "field_sum" => TypeName::Float,
+                "field_terms" => TypeName::Int,
                 _ => TypeName::Complex,
             },
             ExprKind::Param(n) => self.param_tys.get(n).copied().unwrap_or(TypeName::Complex),
@@ -5180,6 +5185,18 @@ pub(crate) mod tests {
     use super::super::interp::{run, Env, ParamValues};
     use super::super::{check::check, parser::parse_file, Dialect};
     use super::*;
+
+    /// A field colouring's `sum` and term count kept in variables are a
+    /// number and an int, as the checker types them (`Predef::ty`): the
+    /// declarations' own table lacked them, so `let code = sum;` was a
+    /// complex and `floor(code / 10.0)` would not go back into a number.
+    #[test]
+    fn a_field_colourings_inputs_keep_their_types_in_variables() {
+        let src = "fn shade(sum, grad, n, p) {\n    let code = sum;\n    let k = n;\n    let t = 0.5;\n    t = code - 10.0 * floor(code / 10.0) + k.to_float();\n    t\n}\n";
+        if let Err(d) = field_coloring(src) {
+            panic!("{}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>().join("\n"));
+        }
+    }
 
     fn uf(src: &str) -> Program {
         let (file, d) = parse_file(src);
