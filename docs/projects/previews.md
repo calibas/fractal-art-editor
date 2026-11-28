@@ -1,10 +1,10 @@
 # Previews on the server
 
-**Status 2026-11-27:** steps 1-4 built and ffapi's merged; this repo's on
-branch `previews`. Section 4 (script parameters and every built-in's
-twin, "a kind of preview") built on the same branch here and on ffapi's
-`script-parameters`, neither merged. Tried against the development
-database:
+**Status 2026-11-28:** steps 1-4 and section 4 (script parameters and
+every built-in's twin, "a kind of preview") built; ffapi's all merged
+(`previews`, `script-parameters`, `test-cleanup`), this repo's on branch
+`previews`. Synced and uploaded against the development database
+(section 4's last paragraph). Tried against the development database:
 - **Rendered:** 928 pictures of 931 planned, in a few minutes. The
   slowest are the simulations. The three tracks have no Catalog picture.
 - **Blank:** 64 of the 928 came out blank and are not kept or uploaded
@@ -172,14 +172,24 @@ parameters, and the browser cannot collect a GPU kind's.
     `field_coloring` of its key;
   - BROWSER_APP_0.6.md and curated-build.md.
 
-**After merging both,** the local sync (`export_curated_json`, then
-`sync_curated.py --write`) reports, for scripts: the twins `created`;
-the five built-in keys whose example was curated there (`mandelbrot`,
-`burning_ship`, `phoenix`, `smooth`, `orbit_trap`) `new_version`, the
-example kept as the older version; the five examples `created` under
-their new names; everything else `unchanged`, with its parameters filled
-in. Then `export_previews --upload` sends the five new example names'
-pictures.
+**Synced 2026-11-28** against the development database: 108 twins
+`created`; `burning_ship`, `phoenix`, `smooth` and `orbit_trap`
+`new_version` (each keeping its example as the older version); the five
+examples `created` under their new names; everything else `unchanged`.
+Two errors, both fixed:
+- `formula/mandelbrot`: an older copy of the same source already held the
+  stem `mandelbrot~f5648772`, so moving the current row aside broke the
+  unique stem. ffapi's `move_aside` takes the next free one (`-2`); the
+  rerun gave `new_version`.
+- `effect/kaleidoscope-example`: the effect twin `kaleidoscope.rhai` came
+  in with the CPU modifier of that name (scripts were matched by file name
+  alone). Matched by store and file now.
+
+The upload sent the five examples' pictures and, unexpectedly, 14 effects
+again: an effect's parameters are a `HashMap`, serialized in a different
+order every run, so every config with an effect hashed differently. They
+serialize in name order now; the next upload sends the effects once more
+under their stable keys.
 
 ## 5. Blank pictures: the Catalog's previews to fix
 
