@@ -223,7 +223,7 @@ const found = JSON.parse(await render.probe());   // rejects with a clear messag
 ### Checking a Rhai source
 
 Both modules have `compile(kind, source)`: the check the desktop Formula
-Editor makes before Use, for any kind (`storage::library::check`) --
+Editor makes before Use (`storage::library::check`) --
 the language, then what the kind builds (a colouring that colours
 nothing, a variation's, an effect's or a simulation's module, a solid's
 walk). It registers nothing and needs no GPU, so it can run as the user
@@ -239,7 +239,10 @@ const r = JSON.parse(render.compile("formula", source));   // "" reads the kind 
 
 - `kind` is the API's name: `formula`, `coloring`, `field`,
   `field_coloring`, `solid`, `sim_model`, `sim_coloring`, `variation`,
-  `effect`, `track`, `generator`, `modifier`, `library`.
+  `effect`, and in **`fae-script` only** `track`, `generator`,
+  `modifier`, `library`. The renderer's `compile()` answers those with a
+  `"kind"` error: checking them needs the script host and the track
+  runner, which the renderer does not carry (about 0.4 MB of code).
 - `stage`: `"kind"` (the source is another kind than the one asked for,
   or none at all), `"check"` (parsing, names, types), `"build"` (the
   kind's own compile).

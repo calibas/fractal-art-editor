@@ -419,7 +419,7 @@ pub fn forget(file: &str) {
 /// (`params::api_json` each; `curated::manifest`, the Scripts panel's
 /// upload). A library declares none.
 pub fn param_defs(kind: Kind, source: &str) -> Result<Vec<crate::params::ParamDef>, String> {
-    use crate::lang::{ir::ComplexParams, EntryKind};
+    use crate::lang::EntryKind;
     let entry = match kind {
         Kind::Generator | Kind::Modifier => return crate::script::headless::param_defs(source),
         Kind::Track => return crate::animation::script::declare(source).map(|d| d.params),
@@ -446,8 +446,15 @@ pub fn param_defs(kind: Kind, source: &str) -> Result<Vec<crate::params::ParamDe
             .map(|x| x.render(source))
             .unwrap_or_else(|| "it does not compile".to_string())
     })?;
+    program_params(kind, &program, source)
+}
+
+/// A GPU kind's parameters from its checked program, as [`param_defs`]
+/// reads them.
+fn program_params(kind: Kind, program: &crate::lang::ir::Program, source: &str) -> Result<Vec<crate::params::ParamDef>, String> {
+    use crate::lang::ir::ComplexParams;
     match kind {
-        Kind::Variation => crate::variations::custom::param_defs(&program, source),
+        Kind::Variation => crate::variations::custom::param_defs(program, source),
         Kind::Effect | Kind::SimModel | Kind::SimColoring => program.param_defs(ComplexParams::Refuse("its parameters are real")),
         _ => program.param_defs(ComplexParams::Split(".")),
     }
@@ -547,30 +554,58 @@ impl Checked {
     }
 }
 
-/// Check a Rhai source as the Formula Editor checks it before Use: the
-/// language, then what its kind builds -- everything short of rendering.
-/// `expected` is the kind it is to be (a script's published kind);
-/// `None` reads it from the source. Registers nothing, so it can run on
-/// every keystroke. A shader the compiler produced that a GPU refuses is
-/// not found here (the web build has no WGSL validator): a render reports
-/// that.
-pub fn check(source: &str, expected: Option<Kind>) -> Checked {
-    let mut checked = check_only(source, expected);
-    if checked.errors.is_empty() {
-        match api_parameters(checked.kind, source) {
-            Ok(p) => checked.parameters = p,
-            Err(e) => checked.errors.push(Problem::rendered(&e, "build")),
-        }
+/// The CPU scripts' half of a check: a generator's or modifier's
+/// parameters collected (not run), a track run once as the editor checks
+/// it; its title, when it has one, and its parameters. A check is handed
+/// it by a caller that carries the script host ([`script_check`]);
+/// without it (`None`) a check needs none of that code -- the renderer
+/// module's, which would otherwise carry the script host and the track
+/// runner for kinds it never draws.
+pub type ScriptCheck = fn(Kind, &str) -> Result<(Option<String>, Vec<crate::params::ParamDef>), String>;
+
+/// [`ScriptCheck`] by the script host and the track runner.
+pub fn script_check(kind: Kind, source: &str) -> Result<(Option<String>, Vec<crate::params::ParamDef>), String> {
+    match kind {
+        Kind::Track => crate::animation::script::try_run(source).map(|d| (Some(d.title), d.params)),
+        Kind::Generator | Kind::Modifier => crate::script::headless::param_defs(source).map(|p| (None, p)),
+        _ => Ok((None, Vec::new())),
     }
-    checked
 }
 
-/// [`check`] for a page, the gallery modules' `compile(kind, source)`:
+/// Check a Rhai source as the Formula Editor checks it before Use: the
+/// language, then what its kind builds -- everything short of rendering
+/// -- and, when there is nothing wrong, its parameters. `expected` is the
+/// kind it is to be (a script's published kind); `None` reads it from the
+/// source. Registers nothing, so it can run on every keystroke. A shader
+/// the compiler produced that a GPU refuses is not found here (the web
+/// build has no WGSL validator): a render reports that.
+pub fn check(source: &str, expected: Option<Kind>) -> Checked {
+    check_with(source, expected, Some(script_check), true)
+}
+
+/// [`check`] without the parameters: what the Formula Editor lists as it
+/// is typed in.
+pub fn check_only(source: &str, expected: Option<Kind>) -> Checked {
+    check_with(source, expected, Some(script_check), false)
+}
+
+/// [`check`] for a page, the script module's `compile(kind, source)`:
 /// `kind` a published kind's name (`"formula"`, `"field_coloring"`,
 /// `"generator"` ... as the API spells them), or empty to read it from
 /// the source. The report as JSON ([`Checked::to_json`]); a kind this
 /// build does not know is a report too, not an error.
 pub fn compile_json(kind: &str, source: &str) -> String {
+    compile_json_with(kind, source, Some(script_check))
+}
+
+/// [`compile_json`] for the GPU kinds alone, the renderer module's: a
+/// generator, modifier or track is the script module's to check, and
+/// leaving them out keeps the script host out of the renderer.
+pub fn compile_json_gpu(kind: &str, source: &str) -> String {
+    compile_json_with(kind, source, None)
+}
+
+fn compile_json_with(kind: &str, source: &str, scripts: Option<ScriptCheck>) -> String {
     let expected = match kind.trim() {
         "" => None,
         wire => match Kind::from_wire(wire) {
@@ -590,26 +625,27 @@ pub fn compile_json(kind: &str, source: &str) -> String {
             }
         },
     };
-    check(source, expected).to_json().to_string()
+    check_with(source, expected, scripts, true).to_json().to_string()
 }
 
-/// [`check`] without the parameters: what the Formula Editor lists as it
-/// is typed in.
-pub fn check_only(source: &str, expected: Option<Kind>) -> Checked {
+/// [`check`], with the CPU scripts' half given or not ([`ScriptCheck`]),
+/// and the parameters read or not.
+pub fn check_with(source: &str, expected: Option<Kind>, scripts: Option<ScriptCheck>, with_params: bool) -> Checked {
     use crate::lang::EntryKind;
     let read = rhai_kind(source);
     let kind = expected.unwrap_or(read);
     let mut errors = Vec::new();
+    let mut parameters = Vec::new();
     let mut title = crate::lang::rhai::title(source);
+    let refuse = |kind: Kind, title: Option<String>, message: String| Checked {
+        kind,
+        title,
+        errors: vec![Problem { line: None, column: None, message, stage: "kind" }],
+        parameters: Vec::new(),
+    };
     if read.is_entry() && read != kind {
         let wire = |k: Kind| k.wire().unwrap_or("unknown");
-        errors.push(Problem {
-            line: None,
-            column: None,
-            message: format!("this source is a {} by its functions, not a {}", wire(read), wire(kind)),
-            stage: "kind",
-        });
-        return Checked { kind, title, errors, parameters: Vec::new() };
+        return refuse(kind, title, format!("this source is a {} by its functions, not a {}", wire(read), wire(kind)));
     }
     let entry = match kind {
         Kind::Formula => Some(EntryKind::Formula),
@@ -623,13 +659,11 @@ pub fn check_only(source: &str, expected: Option<Kind>) -> Checked {
         Kind::FieldColoring => Some(EntryKind::FieldColoring),
         Kind::Generator | Kind::Modifier | Kind::Track | Kind::ScriptLibrary => None,
         Kind::UfFormulas | Kind::UfColorings | Kind::Fractint | Kind::Unknown => {
-            errors.push(Problem {
-                line: None,
-                column: None,
-                message: "not a Rhai entry this build knows: a formula has `fn step`, a colouring `fn finish`, a variation `fn variation` ...".to_string(),
-                stage: "kind",
-            });
-            return Checked { kind, title, errors, parameters: Vec::new() };
+            return refuse(
+                kind,
+                title,
+                "not a Rhai entry this build knows: a formula has `fn step`, a colouring `fn finish`, a variation `fn variation` ...".to_string(),
+            );
         }
     };
     if let Some(entry) = entry {
@@ -670,23 +704,36 @@ pub fn check_only(source: &str, expected: Option<Kind>) -> Checked {
                 if let Err(e) = built {
                     errors.push(Problem::rendered(&e, "build"));
                 }
+                if with_params && errors.is_empty() {
+                    match program_params(kind, &program, source) {
+                        Ok(p) => parameters = p.iter().map(api_parameter).collect(),
+                        Err(e) => errors.push(Problem::rendered(&e, "build")),
+                    }
+                }
             }
         }
-    } else {
-        // A track runs once, as the editor checks it; a script's
-        // parameters are collected, not run; a library declares none.
-        let ran = match kind {
-            Kind::Track => crate::animation::script::try_run(source).map(|d| {
-                title = Some(d.title);
-            }),
-            Kind::Generator | Kind::Modifier => crate::script::headless::param_defs(source).map(|_| ()),
-            _ => Ok(()),
+    } else if kind != Kind::ScriptLibrary {
+        // A library declares nothing and runs nothing on its own.
+        let Some(scripts) = scripts else {
+            return refuse(
+                kind,
+                title,
+                "a generator, modifier or track is checked by the script module's compile(); this one carries the renderer alone".to_string(),
+            );
         };
-        if let Err(e) = ran {
-            errors.push(Problem::rendered(&e, "check"));
+        match scripts(kind, source) {
+            Ok((own_title, params)) => {
+                if own_title.is_some() {
+                    title = own_title;
+                }
+                if with_params {
+                    parameters = params.iter().map(api_parameter).collect();
+                }
+            }
+            Err(e) => errors.push(Problem::rendered(&e, "check")),
         }
     }
-    Checked { kind, title, errors, parameters: Vec::new() }
+    Checked { kind, title, errors, parameters }
 }
 
 fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {
@@ -948,6 +995,12 @@ fn value(t, p, ctx) { #{ rotation: t } }";
         let json: serde_json::Value = serde_json::from_str(&compile_json("", broken)).unwrap();
         assert_eq!(json["kind"], "formula");
         assert_eq!(json["errors"][0]["line"], 3);
+        // The renderer's check leaves the CPU scripts to the script module.
+        let generator = crate::script::library::EMBEDDED[0].1;
+        let json: serde_json::Value = serde_json::from_str(&compile_json_gpu("generator", generator)).unwrap();
+        assert_eq!(json["errors"][0]["stage"], "kind", "{json}");
+        let json: serde_json::Value = serde_json::from_str(&compile_json("generator", generator)).unwrap();
+        assert_eq!(json["ok"], true, "{json}");
     }
 
     /// A rendered compiler message keeps its position.
